@@ -545,20 +545,27 @@ function pingRow(name,r){var ms=r&&r.avg!=null?Math.round(r.avg):null;var loss=r
  var w=ms==null?0:Math.min(100,ms/300*100);
  return '<div class="prow"><span>'+name+'</span><span>'+(ms==null?'—':ms+' ms')+'</span><span class="bar"><i style="width:'+w+'%;background:'+barColor(ms)+'"></i></span><span class="loss">'+(loss==null?'—':(Math.round(loss*10)/10)+'% 丢包')+'</span></div>'}
 function routeTag(v){if(!v)return '<span class="route-tag unknown">未知</span>';if(v==='未知')return '<span class="route-tag unknown">未知</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
+// 线路标签 -> ASN + 线路名(面板只显示这个, 不显示城市)
+var LINE_DISPLAY={
+ '163':'AS4134 普通 163 骨干网','CN2':'AS4809 CN2 GIA','4837':'AS4837 联通 169 骨干网','9929':'AS9929 联通 A 网',
+ 'CTGNet':'AS23764 CTGNet','CUG':'AS10099 联通国际 CUG','CMI':'AS58453 CMI','CMIN2':'AS58807 CMIN2',
+ '9808':'AS9808 移动普通骨干网','CERNET':'AS4538 教育网 CERNET','CBN':'AS7641 广电网络 CBN',
+ '阿里云':'AS37963/45102 阿里云','腾讯云':'AS45090/132203 腾讯云','华为云':'AS55990 华为云','未知':'未知'
+};
+function lineDisplay(label){return LINE_DISPLAY[label]||label||'未知'}
 function cityTags(r){
-  if(typeof r === 'string') return routeTag(r);
+  if(typeof r === 'string') return routeTag(lineDisplay(r.split(' ').pop()));
   if(!r) return '<span class="route-tag unknown">未知</span>';
-  var cities=[['sh','沪'],['gz','粤'],['bj','京'],['hz','杭州']];
   var out='';
-  cities.forEach(function(c){
-    var v=r[c[0]];
+  ['hz','sh','gz','bj'].forEach(function(c){
+    var v=r[c];
     if(v==null) return;
-    if(v==='未知') out+='<span class="route-tag unknown">'+c[1]+' 未知</span> ';
-    else out+='<span class="route-tag">'+c[1]+' '+esc(v)+'</span> ';
+    if(v==='未知') out+='<span class="route-tag unknown">未知</span> ';
+    else out+='<span class="route-tag">'+esc(lineDisplay(v))+'</span> ';
   });
   return out==='' ? '<span class="route-tag unknown">未知</span>' : out.trim();
 }
-function retTag(v){if(!v)return '<span class="route-tag unknown">—</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
+function retTag(v){if(!v)return '<span class="route-tag unknown">—</span>';var label=String(v).split(' ').pop();return '<span class="route-tag">'+esc(lineDisplay(label))+'</span>'}
 // 圆盘指针仪表: 240 度表盘(左下 210 度经顶部到右下 -30 度), 指针指向数值, 颜色随阈值变
 function polar(cx,cy,r,deg){var a=deg*Math.PI/180;return [cx+r*Math.cos(a),cy-r*Math.sin(a)]}
 function arcD(cx,cy,r,a0,a1){var s=polar(cx,cy,r,a0),e=polar(cx,cy,r,a1);var large=(a0-a1)>180?1:0;return 'M '+s[0].toFixed(1)+' '+s[1].toFixed(1)+' A '+r+' '+r+' 0 '+large+' 1 '+e[0].toFixed(1)+' '+e[1].toFixed(1)}

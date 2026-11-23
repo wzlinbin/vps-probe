@@ -400,7 +400,7 @@ function timeAgo(ts){var s=Math.floor(Date.now()/1000-ts);if(s<60)return s+' 秒
 function barColor(ms){if(ms==null)return '#cbd5e1';if(ms<120)return '#22c55e';if(ms<250)return '#eab308';return '#ef4444'}
 function pingRow(name,r){var ms=r&&r.avg!=null?Math.round(r.avg):null;var loss=r&&r.loss!=null?r.loss:null;
  var w=ms==null?0:Math.min(100,ms/300*100);
- return '<div class="prow"><span>'+name+'</span><span>'+(ms==null?'—':ms+' ms')+'</span><span class="bar"><i style="width:'+w+'%;background:'+barColor(ms)+'"></i></span><span class="loss">'+(loss==null?'—':loss+'% 丢包')+'</span></div>'}
+ return '<div class="prow"><span>'+name+'</span><span>'+(ms==null?'—':ms+' ms')+'</span><span class="bar"><i style="width:'+w+'%;background:'+barColor(ms)+'"></i></span><span class="loss">'+(loss==null?'—':(Math.round(loss*10)/10)+'% 丢包')+'</span></div>'}
 function routeTag(v){if(!v)return '<span class="route-tag unknown">未知</span>';if(v==='未知')return '<span class="route-tag unknown">未知</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
 function retTag(v){if(!v)return '<span class="route-tag unknown">—</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
 // 圆盘指针仪表: 240 度表盘(左下 210 度经顶部到右下 -30 度), 指针指向数值, 颜色随阈值变

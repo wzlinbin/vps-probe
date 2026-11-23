@@ -235,7 +235,8 @@ async function handlePush(request, env) {
     return json({ error: "上报过于频繁" }, 429);
   }
   await env.PROBE_KV.put(rlKey, String(now), { expirationTtl: 60 });
-  await env.PROBE_KV.put("node:" + data.node + ":latest", JSON.stringify({ receivedAt: now, data }), { expirationTtl: 7 * 86400 });
+  // 记下节点公网 IP(供面板生成 itdog 去程链接); 下次上报前该值为旧 IP, 不影响使用
+  await env.PROBE_KV.put("node:" + data.node + ":latest", JSON.stringify({ receivedAt: now, data, ip: clientIP(request) }), { expirationTtl: 7 * 86400 });
   const first = await env.PROBE_KV.get("node:" + data.node + ":first_seen");
   if (first === null) await env.PROBE_KV.put("node:" + data.node + ":first_seen", String(now));
   // 去程探测结果: 国内探测节点向目标 VPS 探测, 按目标节点 + 探测方运营商存, 1 小时过期, 状态接口只取 10 分钟内的
@@ -330,6 +331,7 @@ async function handleStatus(env) {
       data: parsed.data,
       meta,
       ret,
+      ip: parsed.ip || null,
     });
   }
   nodes.sort((a, b) => (a.id < b.id ? -1 : 1));

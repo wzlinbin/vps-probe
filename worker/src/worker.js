@@ -179,6 +179,15 @@ export default {
       if (!(await getSession(request, env))) return json({ error: "未登录" }, 401);
       return handleMeta(request, env);
     }
+    if (path === "/api/node/delete" && request.method === "POST") {
+      if (!(await getSession(request, env))) return json({ error: "未登录" }, 401);
+      return handleNodeDelete(request, env);
+    }
+    if (path === "/api/agent-token" && request.method === "GET") {
+      if (!(await getSession(request, env))) return json({ error: "未登录" }, 401);
+      if (!env.AGENT_TOKEN) return json({ error: "未配置 AGENT_TOKEN" }, 500);
+      return json({ ok: true, token: env.AGENT_TOKEN });
+    }
     if (path === "/" && request.method === "GET") {
       if (await getSession(request, env)) return html(DASHBOARD_HTML);
       return html(LOGIN_HTML);
@@ -332,6 +341,30 @@ async function handleMeta(request, env) {
   return json({ ok: true });
 }
 
+// 删除节点: 删上报记录、首次上报时间、备注设置及该节点作为回程目标的记录。
+// agent 若仍在运行, 下次上报(30 秒内)会重新出现, 所以只对死节点真正有效。
+async function handleNodeDelete(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "JSON 解析失败" }, 400);
+  }
+  if (typeof body.node !== "string" || !NODE_RE.test(body.node)) return json({ error: "node 非法" }, 400);
+  const id = body.node;
+  const keys = ["node:" + id + ":latest", "node:" + id + ":first_seen", "node:" + id + ":meta"];
+  const retList = await env.PROBE_KV.list({ prefix: "return:" + id + ":" });
+  for (const k of retList.keys) keys.push(k.name);
+  let deleted = 0;
+  for (const k of keys) {
+    if ((await env.PROBE_KV.get(k)) !== null) {
+      await env.PROBE_KV.delete(k);
+      deleted++;
+    }
+  }
+  return json({ ok: true, deleted });
+}
+
 // ---------- 页面 ----------
 
 const LOGIN_HTML = `<!DOCTYPE html>
@@ -362,6 +395,21 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 .top{display:flex;justify-content:space-between;align-items:center;margin:4px 4px 16px}
 .top h1{font-size:20px;margin:0}.top .sub{color:#8a90a0;font-size:12px;margin-top:2px}
 .logout{background:none;border:1px solid #d8dce6;border-radius:8px;padding:6px 12px;font-size:13px;color:#5b6474;cursor:pointer}
+.topbtns{display:flex;gap:8px}
+.addnode{background:#1f2430;color:#fff;border:0;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer}
+.modal{position:fixed;inset:0;background:rgba(15,20,35,.45);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:50}
+.modal.open{display:flex}
+.modal .box{background:#fff;border-radius:16px;padding:22px;width:min(92vw,560px);box-shadow:0 12px 40px rgba(15,25,50,.25)}
+.modal h3{margin:0 0 4px;font-size:17px}
+.modal .hint{color:#8a90a0;font-size:12px;margin-bottom:14px;line-height:1.5}
+.modal .row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.modal .row label{font-size:12px;color:#5b6474;width:100%}
+.modal .row input,.modal .row select{padding:8px 10px;border:1px solid #d8dce6;border-radius:8px;font-size:13px;flex:1;min-width:140px}
+.modal textarea{width:100%;min-height:64px;padding:10px;border:1px solid #d8dce6;border-radius:8px;font-size:12px;font-family:monospace;resize:vertical;background:#f8f9fb;box-sizing:border-box}
+.modal .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.modal .actions button{padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer}
+.modal .copy{background:#1f2430;color:#fff;border:0}
+.modal .close{background:#fff;border:1px solid #d8dce6;color:#5b6474}
 .card{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(30,40,70,.08);padding:22px;margin-bottom:16px}
 .nodehead{display:flex;justify-content:space-between;align-items:baseline}
 .nodehead h2{font-size:19px;margin:0}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:1px}
@@ -394,12 +442,24 @@ th{color:#8a90a0;font-weight:500;font-size:12px}
 .metaform{margin-top:16px;padding-top:14px;border-top:1px solid #eef0f4;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .metaform input{padding:8px 10px;border:1px solid #d8dce6;border-radius:8px;font-size:13px;width:120px}
 .metaform button{padding:8px 14px;border:0;border-radius:8px;background:#1f2430;color:#fff;font-size:13px;cursor:pointer}
+.metaform button.del{background:#fff;color:#dc2626;border:1px solid #fca5a5}
+.metaform button.del:hover{background:#fef2f2}
 .metaform .saved{color:#16a34a;font-size:13px}
 .empty{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(30,40,70,.08);padding:40px 24px;text-align:center;color:#8a90a0}
 @media(max-width:560px){.gauges{gap:8px}.prow{grid-template-columns:44px 62px 1fr 46px}}
 </style></head><body><div class="wrap">
-<div class="top"><div><h1>探针</h1><div class="sub" id="updated"></div></div><button class="logout" id="logout">退出</button></div>
+<div class="top"><div><h1>探针</h1><div class="sub" id="updated"></div></div><div class="topbtns"><button class="addnode" id="addnode">＋ 新增节点</button><button class="logout" id="logout">退出</button></div></div>
 <div id="list"></div>
+<div class="modal" id="addmodal"><div class="box">
+<h3>新增节点</h3>
+<div class="hint">填好后自动生成安装命令，在新 VPS 上用 root 跑一条命令即可。节点 id 留空则按主机名自动生成；运营商与回程目标仅国内节点需要。</div>
+<div class="row"><label>节点 id（可选）</label><input id="an-node" type="text" placeholder="如 la，留空自动生成"></div>
+<div class="row"><label>显示名（可选）</label><input id="an-name" type="text" placeholder="如 洛杉矶"></div>
+<div class="row"><label>运营商（仅国内节点）</label><select id="an-carrier"><option value="">留空</option><option value="ct">电信 ct</option><option value="cu">联通 cu</option><option value="cm">移动 cm</option></select></div>
+<div class="row"><label>回程目标（可选）</label><input id="an-returns" type="text" placeholder="如 la:1.2.3.4"></div>
+<div class="row"><label>安装命令</label><textarea id="an-cmd" readonly></textarea></div>
+<div class="actions"><button class="close" id="an-close">关闭</button><button class="copy" id="an-copy">复制命令</button></div>
+</div></div>
 </div>
 <script>
 var list=document.getElementById('list'),updated=document.getElementById('updated');
@@ -479,20 +539,75 @@ function render(nodes,now){
    +'<tr><td>联通</td><td>'+cityTags(d.route.cu)+'</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td></tr>'
    +'<tr><td>移动</td><td>'+cityTags(d.route.cm)+'</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td></tr></table>'
    +'<div class="note">回程线路由国内探测节点上报, 未上报时显示 —。数据 '+timeAgo(n.lastSeen)+'更新。</div>';
-  h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button data-node="'+esc(n.id)+'">保存设置</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
+  h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button class="save" data-node="'+esc(n.id)+'">保存设置</button><button class="del" data-node="'+esc(n.id)+'">删除节点</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
   h+='</div>';
  });
  list.innerHTML=h;
  restoreMeta(draft);
- list.querySelectorAll('.metaform button').forEach(function(btn){
+ list.querySelectorAll('.metaform button.save').forEach(function(btn){
   btn.addEventListener('click',function(){
    var id=btn.getAttribute('data-node');
    var q=document.getElementById('q-'+id).value,e=document.getElementById('e-'+id).value,p=document.getElementById('p-'+id).value,nm=document.getElementById('n-'+id).value;
    fetch('/api/meta',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({node:id,name:nm==='' ?null:nm,quotaGB:q===''?null:Number(q),expiresAt:e==='' ?null:e,price:p==='' ?null:p})}).then(function(r){return r.json()}).then(function(j){document.getElementById('s-'+id).textContent=j.ok?'已保存':'保存失败: '+(j.error||'');if(j.ok)load()});
   });
  });
+ list.querySelectorAll('.metaform button.del').forEach(function(btn){
+  btn.addEventListener('click',function(){
+   var id=btn.getAttribute('data-node');
+   var nm=document.getElementById('n-'+id).value||id;
+   if(!confirm('确定删除节点 '+nm+' ('+id+') 吗?删除后将从面板移除,且不可恢复。若该节点 agent 仍在运行,30 秒后会重新出现。'))return;
+   fetch('/api/node/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({node:id})}).then(function(r){return r.json()}).then(function(j){
+    if(j.ok){load(true)}
+    else{alert('删除失败: '+(j.error||'未知错误'))}
+   }).catch(function(){alert('删除失败: 网络错误')});
+  });
+ });
 }
-function load(){fetch('/api/status').then(function(r){if(r.status===401){location.reload();return null}return r.json()}).then(function(j){if(!j)return;if(editingMeta())return;updated.textContent='最近更新 '+new Date(j.now*1000).toLocaleTimeString('zh-CN');render(j.nodes,j.now)}).catch(function(){})}
+function load(force){fetch('/api/status').then(function(r){if(r.status===401){location.reload();return null}return r.json()}).then(function(j){if(!j)return;if(!force&&editingMeta())return;updated.textContent='最近更新 '+new Date(j.now*1000).toLocaleTimeString('zh-CN');render(j.nodes,j.now)}).catch(function(){})}
 document.getElementById('logout').addEventListener('click',function(){fetch('/api/logout',{method:'POST'}).then(function(){location.reload()})});
+// 新增节点: 弹窗生成带 token 的安装命令, token 只在打开弹窗时取一次, 命令随表单实时生成。
+var agentToken=null;
+function shellQuote(s){if(/^[a-zA-Z0-9._:-]+$/.test(s))return s;return "'"+s.replace(/'/g,"'\\''")+"'"}
+function buildInstallCmd(){
+  var node=document.getElementById('an-node').value.trim();
+  var name=document.getElementById('an-name').value.trim();
+  var carrier=document.getElementById('an-carrier').value;
+  var returns=document.getElementById('an-returns').value.trim();
+  var out=document.getElementById('an-cmd');
+  if(!agentToken){out.value='正在获取 token...';return}
+  var args=[location.origin,agentToken,node,name,carrier,returns];
+  var last=1;
+  args.forEach(function(a,i){if(a)last=i});
+  var parts=['curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh'];
+  for(var i=0;i<=last;i++){parts.push(args[i]?shellQuote(args[i]):'""')}
+  out.value=parts.join(' ');
+}
+function openAddModal(){
+  document.getElementById('addmodal').classList.add('open');
+  if(agentToken){buildInstallCmd();return}
+  fetch('/api/agent-token').then(function(r){return r.json()}).then(function(j){
+    if(j.ok&&j.token){agentToken=j.token;buildInstallCmd()}
+    else{document.getElementById('an-cmd').value='获取 token 失败: '+(j.error||'未知错误')}
+  }).catch(function(){document.getElementById('an-cmd').value='获取 token 失败: 网络错误'});
+}
+document.getElementById('addnode').addEventListener('click',openAddModal);
+document.getElementById('an-close').addEventListener('click',function(){document.getElementById('addmodal').classList.remove('open')});
+document.getElementById('addmodal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open')});
+['an-node','an-name','an-carrier','an-returns'].forEach(function(id){
+  document.getElementById(id).addEventListener('input',buildInstallCmd);
+});
+document.getElementById('an-copy').addEventListener('click',function(){
+  var cmd=document.getElementById('an-cmd').value;
+  if(!cmd||!agentToken)return;
+  var btn=this;
+  function done(){btn.textContent='已复制';setTimeout(function(){btn.textContent='复制命令'},1500)}
+  function fallbackCopy(){
+    var ta=document.getElementById('an-cmd');
+    ta.focus();ta.select();
+    try{document.execCommand('copy');done()}catch(e){btn.textContent='复制失败，请手动选择'}
+  }
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(cmd).then(done).catch(fallbackCopy)}
+  else{fallbackCopy()}
+});
 load();setInterval(load,5000);
 </script></body></html>`;

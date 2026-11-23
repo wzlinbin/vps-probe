@@ -1,0 +1,8 @@
+name = "vps-probe"
+main = "src/worker.js"
+compatibility_date = "2026-11-23"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "PROBE_KV"
+id = "02c6577154654aec8bb7a0436d0e3ca3"

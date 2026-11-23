@@ -117,7 +117,7 @@ function pickProbeNodes(allNodes) {
       const t = tier(n);
       if (t > 2) break;
       if (!seenTiers.has(t)) { chosen.push(n); seenTiers.add(t); }
-      if (chosen.length >= 2) break;
+      if (chosen.length >= 3) break; // 每档 1 个, 最多 3 档(杭州/浙江/江苏上海); 浙江移动探针全空时可落到上海
     }
     picked[carrier] = chosen;
   }
@@ -306,8 +306,7 @@ export class BoceWorkflow extends WorkflowEntrypoint {
         vpsIdx += 1;
         const sub = {};
         for (const c of dueCarriers) sub[c] = picked[c];
-        const primary = Object.values(sub).map(c => c[0]).filter(Boolean);
-        const res = await this.probeVps(step, round, nodeId, ip, xsrf, sub, primary);
+        const res = await this.probeVps(step, round, nodeId, ip, xsrf, sub);
         // 写 KV(只写测出结果的运营商; 全空/无结果的不写, 下轮 5 分钟后再试)
         for (const carrier of dueCarriers) {
           const r = res[carrier];
@@ -327,7 +326,7 @@ export class BoceWorkflow extends WorkflowEntrypoint {
 
   // 对一个 VPS 做一次去程探测: 首选节点测一轮, 全空的运营商用备选再测一轮.
   // 返回 {carrier: {city, line}}.
-  async probeVps(step, round, nodeId, targetIp, xsrf, candidatesByCarrier, primaryNodes) {
+  async probeVps(step, round, nodeId, targetIp, xsrf, candidatesByCarrier) {
     const out = {};
     const runOnce = async (tag, nodes) => {
       if (!nodes || nodes.length === 0) return {};
@@ -361,12 +360,17 @@ export class BoceWorkflow extends WorkflowEntrypoint {
       }
       return res;
     };
-    Object.assign(out, await runOnce('p', primaryNodes));
-    const fallbackNodes = [];
-    for (const [carrier, cands] of Object.entries(candidatesByCarrier)) {
-      if (!(carrier in out) && cands && cands.length >= 2) fallbackNodes.push(cands[1]);
+    // 按 杭州 -> 浙江 -> 江苏/上海 依次试, 空了就往下一档(浙江移动探针全空时落到上海)
+    const tags = ['p', 'f1', 'f2'];
+    for (let idx = 0; idx < 3; idx++) {
+      const nodes = [];
+      for (const [carrier, cands] of Object.entries(candidatesByCarrier)) {
+        if (carrier in out) continue;
+        if (cands && cands.length > idx) nodes.push(cands[idx]);
+      }
+      if (nodes.length === 0) break;
+      Object.assign(out, await runOnce(tags[idx], nodes));
     }
-    if (fallbackNodes.length > 0) Object.assign(out, await runOnce('f', fallbackNodes));
     return out;
   }
 }

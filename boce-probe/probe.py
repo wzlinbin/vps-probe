@@ -150,7 +150,7 @@ def classify_route(route_json_str, ip_geo_map_str=None):
 def pick_probe_nodes(all_nodes):
     """按 杭州 > 浙江 > 江苏/上海 的优先级, 每运营商选候选节点列表(按优先级排序).
 
-    返回 {carrier: [node, ...]}, 每运营商最多 2 个: 首选(杭州) + 第一个备选(浙江/江苏/上海).
+    返回 {carrier: [node, ...]}, 每运营商最多 3 个: 首选(杭州) + 浙江备选 + 江苏/上海备选.
     某运营商三档都无节点时对应列表为空.
     """
     def tier(node):
@@ -168,7 +168,7 @@ def pick_probe_nodes(all_nodes):
     for carrier_zh, carrier in ISP_ZH.items():
         cands = [n for n in all_nodes if n.get("IspName.zh_CN") == carrier_zh]
         cands.sort(key=lambda n: (tier(n), n.get("CityName.zh_CN", ""), str(n.get("City", ""))))
-        # 只保留 杭州/浙江/江苏/上海 三档, 每档最多取 1 个(首选+第一个备选)
+        # 只保留 杭州/浙江/江苏/上海 三档, 每档最多取 1 个(首选+浙江备选+江苏/上海备选)
         chosen = []
         seen_tiers = set()
         for n in cands:
@@ -178,7 +178,7 @@ def pick_probe_nodes(all_nodes):
             if t not in seen_tiers:
                 chosen.append(n)
                 seen_tiers.add(t)
-            if len(chosen) >= 2:
+            if len(chosen) >= 3:
                 break
         picked[carrier] = chosen
     return picked
@@ -331,10 +331,9 @@ def detect_traceroute_patient(session, target_ip, nodes, poll_timeout=POLL_TIMEO
 def probe_one_vps(session, target_ip, candidates_by_carrier, poll_timeout=POLL_TIMEOUT):
     """对一个 VPS IP 做一次去程探测(只测传入的运营商).
 
-    第一轮: 每运营商用首选节点(杭州)各测 1 条.
-    第二轮: 首选节点路由全空(探针没回数据)的运营商, 用备选节点(浙江/江苏/上海)再测 1 条.
+    按 杭州 -> 浙江 -> 江苏/上海 依次试, 空了就往下一档(浙江移动探针全空时落到上海).
     返回 {carrier: {"city": 城市, "line": 线路}}.
-    某运营商两轮都无可用路由时该运营商缺失, 调用方不写 KV(保留旧值, 下轮 5 分钟后再试).
+    某运营商三档都无可用路由时该运营商缺失, 调用方不写 KV(保留旧值, 下轮 5 分钟后再试).
     有跳点但判不出线路时才写"未知"(算一次有结果, 7 天后再测).
     """
     def run(nodes):
@@ -356,16 +355,17 @@ def probe_one_vps(session, target_ip, candidates_by_carrier, poll_timeout=POLL_T
             out[carrier] = {"city": r.get("cityCN", ""), "line": classify_route(route)}
         return out
 
-    primary = [c[0] for c in candidates_by_carrier.values() if c]
-    out = run(primary)
-    # 备选: 首选全空的运营商, 用备选节点再测
-    fallback_nodes = []
-    for carrier, cands in candidates_by_carrier.items():
-        if carrier not in out and len(cands) >= 2:
-            fallback_nodes.append(cands[1])
-    if fallback_nodes:
-        print(f"[INFO] {target_ip}: {len(fallback_nodes)} 个运营商首选全空, 用备选节点再测...")
-        out.update(run(fallback_nodes))
+    out = {}
+    for idx in range(3):
+        nodes = []
+        for carrier, cands in candidates_by_carrier.items():
+            if carrier in out:
+                continue
+            if cands and len(cands) > idx:
+                nodes.append(cands[idx])
+        if not nodes:
+            break
+        out.update(run(nodes))
     return out
 
 

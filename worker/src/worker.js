@@ -397,6 +397,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 .logout{background:none;border:1px solid #d8dce6;border-radius:8px;padding:6px 12px;font-size:13px;color:#5b6474;cursor:pointer}
 .topbtns{display:flex;gap:8px}
 .addnode{background:#1f2430;color:#fff;border:0;border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer}
+.nav{position:sticky;top:0;z-index:20;background:#eef0f4;padding:10px 4px 12px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid #dde1e8;margin-bottom:14px}
+.nav button{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid #d8dce6;border-radius:999px;background:#fff;font-size:13px;color:#1f2430;cursor:pointer}
+.nav button:hover{background:#f8f9fb}
+.nav .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;flex:none}
+.nav .dot.on{background:#16a34a}
 .modal{position:fixed;inset:0;background:rgba(15,20,35,.45);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:50}
 .modal.open{display:flex}
 .modal .box{background:#fff;border-radius:16px;padding:22px;width:min(92vw,560px);box-shadow:0 12px 40px rgba(15,25,50,.25)}
@@ -410,7 +415,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 .modal .actions button{padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer}
 .modal .copy{background:#1f2430;color:#fff;border:0}
 .modal .close{background:#fff;border:1px solid #d8dce6;color:#5b6474}
-.card{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(30,40,70,.08);padding:22px;margin-bottom:16px}
+.card{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(30,40,70,.08);padding:22px;margin-bottom:16px;scroll-margin-top:64px}
+.card.flash{outline:2px solid #1f2430;outline-offset:3px}
 .nodehead{display:flex;justify-content:space-between;align-items:baseline}
 .nodehead h2{font-size:19px;margin:0}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:1px}
 .dot.on{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.2)}.dot.off{background:#cbd5e1}
@@ -449,20 +455,19 @@ th{color:#8a90a0;font-weight:500;font-size:12px}
 @media(max-width:560px){.gauges{gap:8px}.prow{grid-template-columns:44px 62px 1fr 46px}}
 </style></head><body><div class="wrap">
 <div class="top"><div><h1>探针</h1><div class="sub" id="updated"></div></div><div class="topbtns"><button class="addnode" id="addnode">＋ 新增节点</button><button class="logout" id="logout">退出</button></div></div>
+<div class="nav" id="nav"></div>
 <div id="list"></div>
 <div class="modal" id="addmodal"><div class="box">
 <h3>新增节点</h3>
-<div class="hint">填好后自动生成安装命令，在新 VPS 上用 root 跑一条命令即可。节点 id 留空则按主机名自动生成；运营商与回程目标仅国内节点需要。</div>
+<div class="hint">填好后自动生成安装命令，在新 VPS 上用 root 跑一条命令即可。节点 id 留空则按主机名自动生成。</div>
 <div class="row"><label>节点 id（可选）</label><input id="an-node" type="text" placeholder="如 la，留空自动生成"></div>
 <div class="row"><label>显示名（可选）</label><input id="an-name" type="text" placeholder="如 洛杉矶"></div>
-<div class="row"><label>运营商（仅国内节点）</label><select id="an-carrier"><option value="">留空</option><option value="ct">电信 ct</option><option value="cu">联通 cu</option><option value="cm">移动 cm</option></select></div>
-<div class="row"><label>回程目标（可选）</label><input id="an-returns" type="text" placeholder="如 la:1.2.3.4"></div>
 <div class="row"><label>安装命令</label><textarea id="an-cmd" readonly></textarea></div>
 <div class="actions"><button class="close" id="an-close">关闭</button><button class="copy" id="an-copy">复制命令</button></div>
 </div></div>
 </div>
 <script>
-var list=document.getElementById('list'),updated=document.getElementById('updated');
+var list=document.getElementById('list'),updated=document.getElementById('updated'),nav=document.getElementById('nav');
 function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function fmtBytes(b){if(b>=1073741824)return (b/1073741824).toFixed(1)+' GB';if(b>=1048576)return (b/1048576).toFixed(1)+' MB';if(b>=1024)return (b/1024).toFixed(1)+' KB';return b+' B'}
 function fmtRate(b){if(b>=1048576)return (b/1048576).toFixed(2)+' MB/s';if(b>=1024)return (b/1024).toFixed(1)+' KB/s';return b+' B/s'}
@@ -514,7 +519,24 @@ function snapshotMeta(){var s={};document.querySelectorAll('.metaform input').fo
 function restoreMeta(s){Object.keys(s).forEach(function(id){var el=document.getElementById(id);if(el)el.value=s[id]})}
 function render(nodes,now){
  var draft=snapshotMeta();
- if(!nodes.length){list.innerHTML='<div class="empty">暂无节点<br><span style="font-size:13px">在 VPS 上安装 agent 并上报成功后,这里会显示数据。</span></div>';return}
+ if(!nodes.length){nav.innerHTML='';list.innerHTML='<div class="empty">暂无节点<br><span style="font-size:13px">在 VPS 上安装 agent 并上报成功后,这里会显示数据。</span></div>';return}
+ // 顶部导航条: 状态点 + 名称, 点即跳转定位到对应卡片(直接跳, 不用平滑滚动, 避免被 5 秒刷新打断)。
+ var navHtml='';
+ nodes.forEach(function(n){
+  var d=n.data,m=n.meta||{};
+  var displayName=(m.name&&m.name.length?m.name:(d.name&&d.name.length?d.name:n.id));
+  navHtml+='<button data-node="'+esc(n.id)+'"><span class="dot '+(n.online?'on':'')+'"></span>'+esc(displayName)+'</button>';
+ });
+ nav.innerHTML=navHtml;
+ nav.querySelectorAll('button').forEach(function(btn){
+  btn.addEventListener('click',function(){
+   var card=document.getElementById('card-'+btn.getAttribute('data-node'));
+   if(!card)return;
+   card.scrollIntoView({block:'start'});
+   card.classList.add('flash');
+   setTimeout(function(){card.classList.remove('flash')},1500);
+  });
+ });
  var h='';
  nodes.forEach(function(n){
   var d=n.data,m=n.meta||{};
@@ -525,7 +547,7 @@ function render(nodes,now){
   if(m.expiresAt){var days=Math.ceil((new Date(m.expiresAt+'T00:00:00Z').getTime()-Date.now())/86400000);remain='剩余 '+days+' 天';}
   var displayName=(m.name&&m.name.length?m.name:(d.name&&d.name.length?d.name:n.id));
   var idSuffix=(displayName!==n.id)?' · '+esc(n.id):'';
-  h+='<div class="card"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 运行 '+fmtUptime(d.uptime)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
+  h+='<div class="card" id="card-'+esc(n.id)+'"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 运行 '+fmtUptime(d.uptime)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
   h+='<div class="gauges">'
    +'<div class="tile"><div class="lab">CPU</div>'+gauge(d.cpu)+'<div class="small">'+d.load.map(function(x){return x.toFixed(2)}).join(', ')+'</div></div>'
    +'<div class="tile"><div class="lab">内存</div>'+gauge(memPct)+'<div class="small">'+fmtBytes(d.mem_used)+' / '+fmtBytes(d.mem_total)+'</div></div>'
@@ -571,11 +593,9 @@ function shellQuote(s){if(/^[a-zA-Z0-9._:-]+$/.test(s))return s;return "'"+s.rep
 function buildInstallCmd(){
   var node=document.getElementById('an-node').value.trim();
   var name=document.getElementById('an-name').value.trim();
-  var carrier=document.getElementById('an-carrier').value;
-  var returns=document.getElementById('an-returns').value.trim();
   var out=document.getElementById('an-cmd');
   if(!agentToken){out.value='正在获取 token...';return}
-  var args=[location.origin,agentToken,node,name,carrier,returns];
+  var args=[location.origin,agentToken,node,name];
   var last=1;
   args.forEach(function(a,i){if(a)last=i});
   var parts=['curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh'];
@@ -593,7 +613,7 @@ function openAddModal(){
 document.getElementById('addnode').addEventListener('click',openAddModal);
 document.getElementById('an-close').addEventListener('click',function(){document.getElementById('addmodal').classList.remove('open')});
 document.getElementById('addmodal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open')});
-['an-node','an-name','an-carrier','an-returns'].forEach(function(id){
+['an-node','an-name'].forEach(function(id){
   document.getElementById(id).addEventListener('input',buildInstallCmd);
 });
 document.getElementById('an-copy').addEventListener('click',function(){

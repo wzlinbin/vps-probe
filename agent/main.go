@@ -12,10 +12,12 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"math"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -40,6 +42,7 @@ type config struct {
 	Carrier       string
 	ReturnTargets string
 	Interval      time.Duration
+	RouteInterval time.Duration
 	Once          bool
 	AllowHTTP     bool
 	StateDir      string
@@ -54,6 +57,7 @@ func loadConfig() config {
 	flag.StringVar(&c.Carrier, "carrier", "", "本机所在运营商 ct/cu/cm, 用于回程探测 (也可走环境变量 PROBE_CARRIER)")
 	flag.StringVar(&c.ReturnTargets, "return-targets", "", "回程探测目标, 如 la:1.2.3.4,node2:5.6.7.8 (也可走环境变量 PROBE_RETURN_TARGETS)")
 	flag.DurationVar(&c.Interval, "interval", 30*time.Second, "上报间隔")
+	flag.DurationVar(&c.RouteInterval, "route-interval", 5*time.Minute, "线路探测间隔(去程/回程), 如 5m")
 	flag.BoolVar(&c.Once, "once", false, "只采集一次并打印 JSON，不上报")
 	flag.BoolVar(&c.AllowHTTP, "allow-http", false, "允许 http 上报(仅本地测试)")
 	flag.StringVar(&c.StateDir, "state-dir", "/var/lib/vps-probe", "累计流量状态文件目录")
@@ -80,6 +84,11 @@ func loadConfig() config {
 	if v := os.Getenv("PROBE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.Interval = d
+		}
+	}
+	if v := os.Getenv("PROBE_ROUTE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.RouteInterval = d
 		}
 	}
 	return c
@@ -147,6 +156,11 @@ type collector struct {
 	lastRx        uint64
 	lastTx        uint64
 	haveState     bool
+	// 线路探测降频: 去程/回程每 routeInterval 才重测一次, 期间用缓存
+	routeInterval time.Duration
+	lastRoute     map[string]map[string]*string
+	lastRet       map[string]string
+	nextRoute     time.Time
 }
 
 type cpuSample struct {
@@ -414,12 +428,54 @@ func pingOne(target string) *pingResult {
 	return r
 }
 
+// TCP ping: 对目标端口做 TCP 建连, SYN-ACK 或 RST 都算收到回包(耗时即延迟),
+// 超时未回包算丢包。ICMP 常被运营商/防火墙丢弃或限速, TCP 建连更接近真实流量。
+func tcpPingOne(host, port string) (rttMs float64, ok bool) {
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 2*time.Second)
+	elapsed := time.Since(start).Seconds() * 1000
+	if err == nil {
+		conn.Close()
+		return elapsed, true
+	}
+	// 对端 RST(端口关闭)说明已回包, 延迟有效
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return elapsed, true
+	}
+	return 0, false
+}
+
+// TCP ping 一个目标 3 次(80 端口), 返回平均延迟与丢包率; 3 次全丢返回 Avg=nil。
+func tcpPingTarget(target string) *pingResult {
+	const tries = 3
+	var sum float64
+	var okCount int
+	for i := 0; i < tries; i++ {
+		if rtt, ok := tcpPingOne(target, "80"); ok {
+			sum += rtt
+			okCount++
+		}
+	}
+	r := &pingResult{}
+	if okCount > 0 {
+		avg := sum / float64(okCount)
+		r.Avg = &avg
+	}
+	loss := float64(tries-okCount) / float64(tries) * 100
+	r.Loss = &loss
+	return r
+}
+
 // 逐个试目标, 第一个有回包的为准; 全不通则返回最后一个的结果(100% 丢包)。
+// 每个目标先 TCP ping, 全丢再试 ICMP ping。
 func pingWithFallback(targets []string) (*pingResult, string) {
 	var last *pingResult
 	used := targets[0]
 	for _, t := range targets {
-		p := pingOne(t)
+		p := tcpPingTarget(t)
+		if p == nil || p.Avg == nil {
+			p = pingOne(t)
+		}
 		last, used = p, t
 		if p != nil && p.Avg != nil {
 			break
@@ -581,6 +637,16 @@ func routeViaNexttrace(target string) *string {
 	return &label
 }
 
+// routesDue 本轮是否该重测线路(首次或已到预约时间)。
+func (c *collector) routesDue(now time.Time) bool {
+	return c.lastRoute == nil || !now.Before(c.nextRoute)
+}
+
+// scheduleNextRoute 预约下次线路探测(间隔 + 0-30 秒抖动, 避免多节点同步探测)。
+func (c *collector) scheduleNextRoute(now time.Time) {
+	c.nextRoute = now.Add(c.routeInterval + time.Duration(mathrand.Int63n(30))*time.Second)
+}
+
 // ---------- 采集入口 ----------
 
 func (c *collector) collect(node string) report {
@@ -638,47 +704,71 @@ func (c *collector) collect(node string) report {
 			mu.Unlock()
 		}(k, targets)
 	}
-	// 去程线路: 每运营商 3 个城市各测一次, 并发执行;
-	// 优先 nexttrace(逐跳 ASN), 不可用或失败时回落系统 traceroute+网段表
-	for k, cities := range routeTargets {
-		for city, target := range cities {
-			wg.Add(1)
-			go func(k, city, target string) {
-				defer wg.Done()
-				rt := routeViaNexttrace(target)
-				if rt == nil {
-					rt = tracerouteOne(target)
-				}
-				mu.Lock()
-				if route[k] == nil {
-					route[k] = map[string]*string{}
-				}
-				route[k][city] = rt
-				mu.Unlock()
-			}(k, city, target)
+	// 线路探测降频: 指标每轮都采, 线路(nexttrace/traceroute)默认每 5 分钟才重测一次,
+	// 期间用上次的结果, 避免高频探测被运营商/防火墙风控。
+	probeRoutes := c.routesDue(now)
+	if probeRoutes {
+		// 去程线路: 每运营商 3 个城市各测一次, 并发执行;
+		// 优先 nexttrace(逐跳 ASN), 不可用或失败时回落系统 traceroute+网段表
+		for k, cities := range routeTargets {
+			for city, target := range cities {
+				wg.Add(1)
+				go func(k, city, target string) {
+					defer wg.Done()
+					rt := routeViaNexttrace(target)
+					if rt == nil {
+						rt = tracerouteOne(target)
+					}
+					mu.Lock()
+					if route[k] == nil {
+						route[k] = map[string]*string{}
+					}
+					route[k][city] = rt
+					mu.Unlock()
+				}(k, city, target)
+			}
 		}
 	}
 	wg.Wait()
+	if probeRoutes {
+		// 缓存线路结果, 预约下次探测(加 0-30 秒抖动, 避免多节点同步探测)
+		c.lastRoute = route
+		c.scheduleNextRoute(time.Now())
+	} else {
+		route = c.lastRoute
+	}
 
 	// 回程探测: 从本机(国内) traceroute 到目标 VPS, 分类后随本轮上报。
 	// 只有成功分类的才上报, 测不出(未知)不覆盖上一次的好结果。
+	// 与去程线路共用降频: 测出后缓存, 未到下次探测时间直接用缓存。
 	var ret map[string]string
 	if c.carrier != "" && len(c.returnTargets) > 0 {
-		ret = map[string]string{}
-		var rwg sync.WaitGroup
-		var rmu sync.Mutex
-		for _, t := range c.returnTargets {
-			rwg.Add(1)
-			go func(t returnTarget) {
-				defer rwg.Done()
-				if label := tracerouteOne(t.ip); label != nil && *label != "未知" {
-					rmu.Lock()
-					ret[t.node] = *label
-					rmu.Unlock()
-				}
-			}(t)
+		if probeRoutes {
+			ret = map[string]string{}
+			var rwg sync.WaitGroup
+			var rmu sync.Mutex
+			for _, t := range c.returnTargets {
+				rwg.Add(1)
+				go func(t returnTarget) {
+					defer rwg.Done()
+					if label := tracerouteOne(t.ip); label != nil && *label != "未知" {
+						rmu.Lock()
+						ret[t.node] = *label
+						rmu.Unlock()
+					}
+				}(t)
+			}
+			rwg.Wait()
+			if c.lastRet == nil {
+				c.lastRet = map[string]string{}
+			}
+			for k, v := range ret {
+				c.lastRet[k] = v
+			}
+			ret = c.lastRet
+		} else {
+			ret = c.lastRet
 		}
-		rwg.Wait()
 	}
 
 	r := report{
@@ -814,7 +904,7 @@ func main() {
 		}
 	}
 
-	c := &collector{name: cfg.Name, carrier: cfg.Carrier, returnTargets: rts}
+	c := &collector{name: cfg.Name, carrier: cfg.Carrier, returnTargets: rts, routeInterval: cfg.RouteInterval}
 	if cfg.StateDir != "" {
 		c.statePath = filepath.Join(cfg.StateDir, "state.json")
 		c.loadState()

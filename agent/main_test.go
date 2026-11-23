@@ -157,4 +157,74 @@ func TestRoutesDue(t *testing.T) {
 	}
 }
 
+func TestMergeRouteCache(t *testing.T) {
+	// 已有好结果, 新测失败(未知/nil)时保留好结果
+	dst := map[string]map[string]*string{
+		"ct": {"sh": strPtr("163"), "gz": strPtr("163"), "bj": strPtr("CN2")},
+	}
+	src := map[string]map[string]*string{
+		"ct": {"sh": strPtr("未知"), "gz": nil, "bj": strPtr("163")},
+	}
+	got := mergeRouteCache(dst, src)
+	if *got["ct"]["sh"] != "163" {
+		t.Fatalf("测出未知应保留原 163, got %v", *got["ct"]["sh"])
+	}
+	if *got["ct"]["gz"] != "163" {
+		t.Fatalf("测出 nil 应保留原 163, got %v", *got["ct"]["gz"])
+	}
+	// 新测出真实线路时覆盖
+	got = mergeRouteCache(got, map[string]map[string]*string{
+		"ct": {"sh": strPtr("CN2")},
+	})
+	if *got["ct"]["sh"] != "CN2" {
+		t.Fatalf("测出 CN2 应覆盖, got %v", *got["ct"]["sh"])
+	}
+	// 首次(空缓存)缺失城市补“未知”, 且 9 个城市齐全
+	got = mergeRouteCache(nil, map[string]map[string]*string{
+		"ct": {"sh": strPtr("163")},
+	})
+	for _, k := range []string{"ct", "cu", "cm"} {
+		for _, city := range []string{"sh", "gz", "bj"} {
+			if got[k] == nil || got[k][city] == nil {
+				t.Fatalf("缺少 %s.%s", k, city)
+			}
+		}
+	}
+	if *got["ct"]["sh"] != "163" {
+		t.Fatalf("ct.sh 应为 163, got %v", *got["ct"]["sh"])
+	}
+	if *got["cu"]["sh"] != "未知" {
+		t.Fatalf("未测过的城市应补未知, got %v", *got["cu"]["sh"])
+	}
+}
+
+func TestHasRouteResult(t *testing.T) {
+	if hasRouteResult(nil) {
+		t.Fatal("空应为无结果")
+	}
+	if hasRouteResult(map[string]map[string]*string{"ct": {"sh": strPtr("未知"), "gz": nil}}) {
+		t.Fatal("全未知/nil 应为无结果")
+	}
+	if !hasRouteResult(map[string]map[string]*string{"ct": {"sh": strPtr("未知"), "gz": strPtr("163")}}) {
+		t.Fatal("有一个真实结果即为有结果")
+	}
+}
+
+func TestScheduleNextRouteInterval(t *testing.T) {
+	now := time.Now()
+	// 有结果: 按 routeInterval(24 小时)
+	c := &collector{routeInterval: 24 * time.Hour}
+	c.lastRoute = map[string]map[string]*string{"ct": {"sh": strPtr("163")}}
+	c.scheduleNextRoute(now)
+	if d := c.nextRoute.Sub(now); d < 24*time.Hour || d > 24*time.Hour+30*time.Second {
+		t.Fatalf("有结果时下次应在 24h~24h30s 后, got %v", d)
+	}
+	// 无结果: 5 分钟后重试
+	c.lastRoute = map[string]map[string]*string{"ct": {"sh": strPtr("未知"), "gz": strPtr("未知"), "bj": strPtr("未知")}}
+	c.scheduleNextRoute(now)
+	if d := c.nextRoute.Sub(now); d < 5*time.Minute || d > 5*time.Minute+30*time.Second {
+		t.Fatalf("无结果时下次应在 5m~5m30s 后, got %v", d)
+	}
+}
+
 func strPtr(s string) *string { return &s }

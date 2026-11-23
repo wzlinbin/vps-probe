@@ -188,6 +188,10 @@ export default {
       if (!env.AGENT_TOKEN) return json({ error: "未配置 AGENT_TOKEN" }, 500);
       return json({ ok: true, token: env.AGENT_TOKEN });
     }
+    if (path === "/api/node/refresh-routes" && request.method === "POST") {
+      if (!(await getSession(request, env))) return json({ error: "未登录" }, 401);
+      return handleRefreshRoutes(request, env);
+    }
     if (path === "/" && request.method === "GET") {
       if (await getSession(request, env)) return html(DASHBOARD_HTML);
       return html(LOGIN_HTML);
@@ -238,6 +242,26 @@ async function handlePush(request, env) {
       await env.PROBE_KV.put("return:" + target + ":" + data.carrier, JSON.stringify({ route: label, ts: now }), { expirationTtl: 3600 });
     }
   }
+  const refreshKey = "refresh:" + data.node;
+  const refresh = await env.PROBE_KV.get(refreshKey);
+  if (refresh !== null) {
+    await env.PROBE_KV.delete(refreshKey);
+    return json({ ok: true, refreshRoutes: true });
+  }
+  return json({ ok: true });
+}
+
+// 立即检测: 面板点按钮后在 KV 留一个 10 分钟有效的标记;
+// agent 下次上报(30 秒内)会在 push 响应里看到 refreshRoutes, 下轮立即重测线路。
+async function handleRefreshRoutes(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "JSON 解析失败" }, 400);
+  }
+  if (typeof body.node !== "string" || !NODE_RE.test(body.node)) return json({ error: "node 非法" }, 400);
+  await env.PROBE_KV.put("refresh:" + body.node, String(Math.floor(Date.now() / 1000)), { expirationTtl: 600 });
   return json({ ok: true });
 }
 
@@ -402,6 +426,11 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 .nav button:hover{background:#f8f9fb}
 .nav .dot{width:8px;height:8px;border-radius:50%;background:#9ca3af;flex:none}
 .nav .dot.on{background:#16a34a}
+.routes-actions{margin-top:10px;display:flex;gap:10px;align-items:center}
+.routes-actions button{padding:6px 14px;border:1px solid #d8dce6;border-radius:8px;background:#fff;font-size:13px;color:#1f2430;cursor:pointer}
+.routes-actions button:hover{background:#f8f9fb}
+.routes-actions button:disabled{color:#9ca3af;cursor:default}
+.refresh-status{color:#8a90a0;font-size:12px}
 .modal{position:fixed;inset:0;background:rgba(15,20,35,.45);display:none;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:50}
 .modal.open{display:flex}
 .modal .box{background:#fff;border-radius:16px;padding:22px;width:min(92vw,560px);box-shadow:0 12px 40px rgba(15,25,50,.25)}
@@ -564,7 +593,8 @@ function render(nodes,now){
    +'<tr><td>电信</td><td>'+cityTags(d.route.ct)+'</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td></tr>'
    +'<tr><td>联通</td><td>'+cityTags(d.route.cu)+'</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td></tr>'
    +'<tr><td>移动</td><td>'+cityTags(d.route.cm)+'</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td></tr></table>'
-   +'<div class="note">回程线路由国内探测节点上报, 未上报时显示 —。数据 '+timeAgo(n.lastSeen)+'更新。</div>';
+   +'<div class="note">回程线路由国内探测节点上报, 未上报时显示 —。数据 '+timeAgo(n.lastSeen)+'更新。</div>'
+   +'<div class="routes-actions"><button class="refresh-routes" data-node="'+esc(n.id)+'">立即检测</button><span class="refresh-status" id="rs-'+esc(n.id)+'"></span></div>';
   h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button class="save" data-node="'+esc(n.id)+'">保存设置</button><button class="del" data-node="'+esc(n.id)+'">删除节点</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
   h+='</div>';
  });
@@ -586,6 +616,17 @@ function render(nodes,now){
     if(j.ok){load(true)}
     else{alert('删除失败: '+(j.error||'未知错误'))}
    }).catch(function(){alert('删除失败: 网络错误')});
+  });
+ });
+ list.querySelectorAll('.refresh-routes').forEach(function(btn){
+  btn.addEventListener('click',function(){
+   var id=btn.getAttribute('data-node');
+   var st=document.getElementById('rs-'+id);
+   btn.disabled=true;
+   st.textContent='已发送检测请求, 约 1 分钟后更新';
+   fetch('/api/node/refresh-routes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({node:id})}).then(function(r){return r.json()}).then(function(j){
+    if(!j.ok){st.textContent='发送失败: '+(j.error||'');btn.disabled=false}
+   }).catch(function(){st.textContent='发送失败: 网络错误';btn.disabled=false});
   });
  });
 }

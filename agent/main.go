@@ -57,7 +57,7 @@ func loadConfig() config {
 	flag.StringVar(&c.Carrier, "carrier", "", "本机所在运营商 ct/cu/cm, 用于回程探测 (也可走环境变量 PROBE_CARRIER)")
 	flag.StringVar(&c.ReturnTargets, "return-targets", "", "回程探测目标, 如 la:1.2.3.4,node2:5.6.7.8 (也可走环境变量 PROBE_RETURN_TARGETS)")
 	flag.DurationVar(&c.Interval, "interval", 30*time.Second, "上报间隔")
-	flag.DurationVar(&c.RouteInterval, "route-interval", 5*time.Minute, "线路探测间隔(去程/回程), 如 5m")
+	flag.DurationVar(&c.RouteInterval, "route-interval", 24*time.Hour, "有线路结果时的探测间隔, 如 24h; 无结果时 5 分钟重试")
 	flag.BoolVar(&c.Once, "once", false, "只采集一次并打印 JSON，不上报")
 	flag.BoolVar(&c.AllowHTTP, "allow-http", false, "允许 http 上报(仅本地测试)")
 	flag.StringVar(&c.StateDir, "state-dir", "/var/lib/vps-probe", "累计流量状态文件目录")
@@ -642,9 +642,57 @@ func (c *collector) routesDue(now time.Time) bool {
 	return c.lastRoute == nil || !now.Before(c.nextRoute)
 }
 
-// scheduleNextRoute 预约下次线路探测(间隔 + 0-30 秒抖动, 避免多节点同步探测)。
+// scheduleNextRoute 预约下次线路探测: 有结果时按 routeInterval(默认 24 小时),
+// 无结果(全是未知)时 5 分钟后重试, 避免新节点一直没结果; 加 0-30 秒抖动。
 func (c *collector) scheduleNextRoute(now time.Time) {
-	c.nextRoute = now.Add(c.routeInterval + time.Duration(mathrand.Int63n(30))*time.Second)
+	interval := c.routeInterval
+	if !hasRouteResult(c.lastRoute) {
+		interval = 5 * time.Minute
+	}
+	c.nextRoute = now.Add(interval + time.Duration(mathrand.Int63n(30))*time.Second)
+}
+
+// mergeRouteCache 把新测的线路结果并入缓存: 只用真实线路覆盖,
+// 测不出(未知/nil)保留上一次的好结果, 避免一次探测失败就把已知的线路抹成未知;
+// 没测出过的城市补“未知”占位(上报要求 9 个城市齐全, 缺了会被 Worker 拒收)。
+func mergeRouteCache(dst, src map[string]map[string]*string) map[string]map[string]*string {
+	if dst == nil {
+		dst = map[string]map[string]*string{}
+	}
+	for k, cities := range src {
+		if dst[k] == nil {
+			dst[k] = map[string]*string{}
+		}
+		for city, rt := range cities {
+			if rt != nil && *rt != "未知" {
+				dst[k][city] = rt
+			}
+		}
+	}
+	unknown := "未知"
+	for k, cities := range routeTargets {
+		if dst[k] == nil {
+			dst[k] = map[string]*string{}
+		}
+		for city := range cities {
+			if dst[k][city] == nil {
+				dst[k][city] = &unknown
+			}
+		}
+	}
+	return dst
+}
+
+// hasRouteResult 是否已有至少一个城市的真实线路结果。
+func hasRouteResult(route map[string]map[string]*string) bool {
+	for _, cities := range route {
+		for _, rt := range cities {
+			if rt != nil && *rt != "未知" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ---------- 采集入口 ----------
@@ -716,8 +764,11 @@ func (c *collector) collect(node string) report {
 				go func(k, city, target string) {
 					defer wg.Done()
 					rt := routeViaNexttrace(target)
-					if rt == nil {
-						rt = tracerouteOne(target)
+					if rt == nil || *rt == "未知" {
+						// nexttrace 没装/失败, 或跑了但判不出线路, 再试系统 traceroute+网段表
+						if tr := tracerouteOne(target); tr != nil && *tr != "未知" {
+							rt = tr
+						}
 					}
 					mu.Lock()
 					if route[k] == nil {
@@ -731,8 +782,9 @@ func (c *collector) collect(node string) report {
 	}
 	wg.Wait()
 	if probeRoutes {
-		// 缓存线路结果, 预约下次探测(加 0-30 秒抖动, 避免多节点同步探测)
-		c.lastRoute = route
+		// 缓存线路结果, 预约下次探测(加 0-30 秒抖动, 避免多节点同步探测)。
+		c.lastRoute = mergeRouteCache(c.lastRoute, route)
+		route = c.lastRoute
 		c.scheduleNextRoute(time.Now())
 	} else {
 		route = c.lastRoute
@@ -785,13 +837,14 @@ func (c *collector) collect(node string) report {
 
 // ---------- 上报 ----------
 
-func push(cfg config, r report) error {
+// push 上报一次, 返回 Worker 是否要求立即重测线路(面板“立即检测”按钮触发)。
+func push(cfg config, r report) (bool, error) {
 	body, err := json.Marshal(r)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(body) > 65536 {
-		return fmt.Errorf("report too large")
+		return false, fmt.Errorf("report too large")
 	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -802,7 +855,7 @@ func push(cfg config, r report) error {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
 		if err != nil {
 			cancel()
-			return err
+			return false, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
@@ -814,18 +867,22 @@ func push(cfg config, r report) error {
 			lastErr = err
 			continue
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
+		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
 		if resp.StatusCode == http.StatusOK {
-			return nil
+			var pr struct {
+				RefreshRoutes bool `json:"refreshRoutes"`
+			}
+			_ = json.Unmarshal(respBody, &pr)
+			return pr.RefreshRoutes, nil
 		}
 		lastErr = fmt.Errorf("worker 返回 HTTP %d", resp.StatusCode)
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusBadRequest {
-			return lastErr // 鉴权/格式问题重试也没用
+			return false, lastErr // 鉴权/格式问题重试也没用
 		}
 	}
-	return lastErr
+	return false, lastErr
 }
 
 func round1(f float64) float64 {
@@ -935,10 +992,15 @@ func main() {
 	logf("agent 启动: 节点 %s, 间隔 %s", cfg.Node, cfg.Interval)
 	for {
 		r := c.collect(cfg.Node)
-		if err := push(cfg, r); err != nil {
+		refresh, err := push(cfg, r)
+		if err != nil {
 			logf("上报失败: %v", err)
 		} else {
 			logf("上报成功: cpu %.1f%% mem %.1f%%", r.CPU, 100*float64(r.MemUsed)/float64(maxU64(r.MemTotal, 1)))
+			if refresh {
+				logf("收到立即检测请求, 下轮重测线路")
+				c.nextRoute = time.Now()
+			}
 		}
 		select {
 		case <-ctx.Done():

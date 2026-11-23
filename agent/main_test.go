@@ -204,22 +204,22 @@ func TestMergeRouteCache(t *testing.T) {
 func TestPickCarrierLabel(t *testing.T) {
 	targets := []string{"115.239.211.112", "122.224.186.100"}
 	// 第一个能分类就用第一个
-	if got := pickCarrierLabel(targets, map[string]*string{
-		"115.239.211.112": strPtr("163"),
-		"122.224.186.100": strPtr("CN2"),
+	if got := pickCarrierLabel(targets, map[string]*routeResult{
+		"115.239.211.112": {Label: "163"},
+		"122.224.186.100": {Label: "CN2"},
 	}); got != "163" {
 		t.Fatalf("应取第一个 163, got %v", got)
 	}
 	// 第一个测不出, 用第二个
-	if got := pickCarrierLabel(targets, map[string]*string{
-		"115.239.211.112": strPtr("未知"),
-		"122.224.186.100": strPtr("CN2"),
+	if got := pickCarrierLabel(targets, map[string]*routeResult{
+		"115.239.211.112": {Label: "未知"},
+		"122.224.186.100": {Label: "CN2"},
 	}); got != "CN2" {
 		t.Fatalf("第一个未知时应用第二个 CN2, got %v", got)
 	}
 	// 都测不出则未知
-	if got := pickCarrierLabel(targets, map[string]*string{
-		"115.239.211.112": strPtr("未知"),
+	if got := pickCarrierLabel(targets, map[string]*routeResult{
+		"115.239.211.112": {Label: "未知"},
 		"122.224.186.100": nil,
 	}); got != "未知" {
 		t.Fatalf("都测不出应为未知, got %v", got)

@@ -31,3 +31,35 @@ func TestClassifyNtHopsCN2GT(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteSegmentsUserTrace(t *testing.T) {
+	var res ntResult
+	if err := json.Unmarshal([]byte(userTrace), &res); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	label, exit, border, domestic := analyzeNtHops(res.Hops)
+	if label != "CN2 GT" {
+		t.Errorf("标签应为 CN2 GT, 得到 %q", label)
+	}
+	if exit != "218.30.48.73 (AS4134)" {
+		t.Errorf("出口节点应为 218.30.48.73 (AS4134), 得到 %q", exit)
+	}
+	if border != "163 → CN2" {
+		t.Errorf("跨境段应为 163 → CN2, 得到 %q", border)
+	}
+	if domestic != "CN2" {
+		t.Errorf("国内骨干段应为 CN2, 得到 %q", domestic)
+	}
+	// 纯 CN2 GIA: 出口即 CN2, 跨境与国内均为 CN2
+	var gia ntResult
+	if err := json.Unmarshal([]byte(giaTrace), &gia); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	label, exit, border, domestic = analyzeNtHops(gia.Hops)
+	if label != "CN2" || border != "CN2" || domestic != "CN2" {
+		t.Errorf("纯 GIA 应为 CN2/CN2/CN2, 得到 %q/%q/%q", label, border, domestic)
+	}
+	if exit != "59.43.1.1" {
+		t.Errorf("纯 GIA 出口应为 59.43.1.1, 得到 %q", exit)
+	}
+}

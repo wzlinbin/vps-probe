@@ -123,6 +123,7 @@ type report struct {
 	NetTxRate    uint64                        `json:"net_tx_rate"` // B/s
 	Ping         map[string]*pingResult        `json:"ping"`        // ct/cu/cm
 	Route        map[string]map[string]*string `json:"route"`       // ct/cu/cm -> hz(杭州) -> 163/CN2/CTGNet/9929/4837/CUG/CMIN2/CMI/9808/CERNET/CBN/阿里云/腾讯云/华为云/未知
+	RouteSegs    map[string]map[string]*routeSeg `json:"route_segments,omitempty"` // 与 route 同结构, 每条线路的三段(出口/跨境/国内)
 }
 
 // 三网探测目标(各家常用 DNS, 可被环境变量覆盖 PROBE_PING_CT/CU/CM)
@@ -161,6 +162,7 @@ type collector struct {
 	// 线路探测降频: 去程/回程每 routeInterval 才重测一次, 期间用缓存
 	routeInterval time.Duration
 	lastRoute     map[string]map[string]*string
+	lastRouteSegs map[string]map[string]*routeSeg
 	lastRet       map[string]string
 	nextRoute     time.Time
 }
@@ -593,7 +595,7 @@ func classifyIP(ip string) string {
 
 var hopRe = regexp.MustCompile(`(?m)^\s*\d+\s+(?:\S+\s+\()?(\d+\.\d+\.\d+\.\d+)\)?`)
 
-func tracerouteOne(target string) *string {
+func tracerouteOne(target string) *routeResult {
 	if _, err := exec.LookPath("traceroute"); err != nil {
 		return nil
 	}
@@ -601,66 +603,28 @@ func tracerouteOne(target string) *string {
 	defer cancel()
 	// 先 ICMP 模式(-I, 沿途路由器回包率高), 命中不了再回落 UDP
 	out, _ := runCmd(ctx, "traceroute", "-I", "-n", "-m", "20", "-w", "2", "-q", "1", target)
-	if label := classifyRoute(out); label != "" {
-		return &label
+	if label, exit, border, domestic := analyzeTraceroute(out); label != "" && label != "未知" {
+		return &routeResult{Label: label, Seg: routeSeg{Exit: exit, Border: border, Domestic: domestic}}
 	}
 	if ctx.Err() != nil {
-		unknown := "未知"
-		return &unknown
+		return &routeResult{Label: "未知"}
 	}
 	out, _ = runCmd(ctx, "traceroute", "-n", "-m", "20", "-w", "2", "-q", "1", target)
-	if label := classifyRoute(out); label != "" {
-		return &label
+	if label, exit, border, domestic := analyzeTraceroute(out); label != "" && label != "未知" {
+		return &routeResult{Label: label, Seg: routeSeg{Exit: exit, Border: border, Domestic: domestic}}
 	}
-	unknown := "未知"
-	return &unknown
+	return &routeResult{Label: "未知"}
 }
 
 // classifyRoute 扫完全部跳点再判线(回落路径, nexttrace 不可用时用).
 // 电信特殊处理: 163 与 CN2 都出现时看先后——163 在先、CN2 在后是 CN2 GT(半程),
 // CN2 在先是 CN2 GIA(全程). 其他运营商取跳点顺序中最先出现的线路.
 func classifyRoute(out string) string {
-	seen := map[string]bool{}
-	firstIdx := map[string]int{}
-	idx := 0
-	for _, m := range hopRe.FindAllStringSubmatch(out, -1) {
-		ip := m[1]
-		if seen[ip] {
-			continue
-		}
-		seen[ip] = true
-		idx++
-		if net.ParseIP(ip).IsPrivate() || strings.HasPrefix(ip, "10.") ||
-			strings.HasPrefix(ip, "172.16.") || strings.HasPrefix(ip, "192.168.") {
-			continue // 跳过内网跳点
-		}
-		label := classifyIP(ip)
-		if label == "" {
-			continue
-		}
-		if _, ok := firstIdx[label]; !ok {
-			firstIdx[label] = idx
-		}
-	}
-	if len(firstIdx) == 0 {
+	label, _, _, _ := analyzeTraceroute(out)
+	if label == "未知" {
 		return ""
 	}
-	if i163, ok163 := firstIdx["163"]; ok163 {
-		if iCN2, okCN2 := firstIdx["CN2"]; okCN2 {
-			if i163 < iCN2 {
-				return "CN2 GT"
-			}
-			return "CN2"
-		}
-	}
-	best := ""
-	bestIdx := 0
-	for label, i := range firstIdx {
-		if best == "" || i < bestIdx {
-			best, bestIdx = label, i
-		}
-	}
-	return best
+	return label
 }
 
 // 线路判断: 优先用 nexttrace 逐跳 ASN(比写死网段更根本, ASN 不会过时)。
@@ -715,60 +679,167 @@ func ntHopIP(raw json.RawMessage) string {
 // CN2 在先是 CN2 GIA(全程). 如 218.30.48.73(AS4134, 洛杉矶出口) -> 59.43.x.x(上海 CN2)
 // 就是 CN2 GT, 不能只看第 3 跳就判成 163. 其他运营商取跳点顺序中最先出现的线路.
 func classifyNtHops(hops [][]ntHop) string {
+	label, _, _, _ := analyzeNtHops(hops)
+	return label
+}
+
+// hopInfo 一条跳点(回程/去程通用): IP + ASN(无 ASN 时为空).
+type hopInfo struct {
+	IP  string
+	ASN string
+}
+
+// routeSeg 一次线路探测的三段.
+type routeSeg struct {
+	Exit     string `json:"exit"`     // 出口节点, 如 "218.30.48.73 (AS4134)"
+	Border   string `json:"border"`   // 跨境段, 如 "163 → CN2"(前后相同则只写一个)
+	Domestic string `json:"domestic"` // 国内骨干段, 如 "CN2"
+}
+
+// routeResult 一次线路探测的结果: 标签 + 三段.
+type routeResult struct {
+	Label string
+	Seg   routeSeg
+}
+
+// isDomesticHop 该跳点是否在国内骨干上(用于定入境点).
+// 前缀能判出线路且非 218.30. 才算国内——218.30.可为美国出口(如 218.30.48.73 洛杉矶),
+// 靠前缀分不出国内外, 须排除, 否则入境点会被提前到洛杉矶那跳.
+func isDomesticHop(ip string) bool {
+	if strings.HasPrefix(ip, "218.30.") {
+		return false
+	}
+	return classifyIP(ip) != ""
+}
+
+// analyzeHops 扫完全部跳点, 返回标签与三段(回程/去程通用, hops 按跳点顺序).
+// exit 为第一个公网跳点; border 为入境前后骨干变化; domestic 为入境后第一个骨干标签.
+// 入境点 = 第一个国内骨干跳点; 找不到入境点时三段为空, 标签按原逻辑取最先出现的线路.
+func analyzeHops(hops []hopInfo) (label, exit, border, domestic string) {
 	firstIdx := map[string]int{}
-	idx := 0
-	for _, ttlHops := range hops {
-		for _, h := range ttlHops {
-			idx++
-			if !h.Success {
-				continue
-			}
-			var label string
-			if h.Geo != nil && h.Geo.Asnumber != "" {
-				num := strings.TrimPrefix(strings.TrimPrefix(h.Geo.Asnumber, "AS"), "as")
-				if n, err := strconv.Atoi(num); err == nil {
-					label, _ = asnLabels[n]
-				}
-			}
-			if label == "" {
-				if ip := ntHopIP(h.Address); ip != "" {
-					label = classifyIP(ip)
-				}
-			}
-			if label == "" {
-				continue
-			}
-			if _, ok := firstIdx[label]; !ok {
-				firstIdx[label] = idx
+	labels := []string{} // 每跳的标签(与 hops 对齐, "" 为判不出)
+	for i, h := range hops {
+		if h.IP == "" || net.ParseIP(h.IP).IsPrivate() {
+			labels = append(labels, "")
+			continue
+		}
+		if exit == "" {
+			if h.ASN != "" {
+				exit = h.IP + " (AS" + h.ASN + ")"
+			} else {
+				exit = h.IP
 			}
 		}
+		var lb string
+		if h.ASN != "" {
+			if n, err := strconv.Atoi(h.ASN); err == nil {
+				lb, _ = asnLabels[n]
+			}
+		}
+		if lb == "" {
+			lb = classifyIP(h.IP)
+		}
+		labels = append(labels, lb)
+		if lb == "" {
+			continue
+		}
+		if _, ok := firstIdx[lb]; !ok {
+			firstIdx[lb] = i
+		}
+		_ = i
 	}
 	if len(firstIdx) == 0 {
-		return "未知"
+		return "未知", exit, "", ""
 	}
-	// 电信: 163 与 CN2 都出现时按先后分 GT/GIA
+	// 标签: 电信 163/CN2 看先后分 GT/GIA, 其他取最先出现的线路
 	if i163, ok163 := firstIdx["163"]; ok163 {
 		if iCN2, okCN2 := firstIdx["CN2"]; okCN2 {
 			if i163 < iCN2 {
-				return "CN2 GT"
+				label = "CN2 GT"
+			} else {
+				label = "CN2"
 			}
-			return "CN2"
+		} else {
+			label = "163"
+		}
+	} else {
+		best := ""
+		bestIdx := 0
+		for lb, i := range firstIdx {
+			if best == "" || i < bestIdx {
+				best, bestIdx = lb, i
+			}
+		}
+		label = best
+	}
+	// 入境点: 第一个国内骨干跳点
+	borderIdx := -1
+	for i, h := range hops {
+		if h.IP == "" || net.ParseIP(h.IP).IsPrivate() {
+			continue
+		}
+		if isDomesticHop(h.IP) {
+			borderIdx = i
+			break
 		}
 	}
-	// 其他: 取跳点顺序中最先出现的线路
-	best := ""
-	bestIdx := 0
-	for label, i := range firstIdx {
-		if best == "" || i < bestIdx {
-			best, bestIdx = label, i
+	if borderIdx < 0 {
+		return label, exit, "", ""
+	}
+	domestic = labels[borderIdx]
+	// 跨境段: 入境前一跳(能判出线路的) -> 入境跳; 相同或无前跳则只写入境标签
+	prev := ""
+	for i := borderIdx - 1; i >= 0; i-- {
+		if labels[i] != "" {
+			prev = labels[i]
+			break
 		}
 	}
-	return best
+	if prev != "" && prev != domestic {
+		border = prev + " → " + domestic
+	} else {
+		border = domestic
+	}
+	return label, exit, border, domestic
+}
+
+// analyzeNtHops 从 nexttrace 结果算标签与三段.
+func analyzeNtHops(hops [][]ntHop) (label, exit, border, domestic string) {
+	var hs []hopInfo
+	for _, ttlHops := range hops {
+		for _, h := range ttlHops {
+			if !h.Success {
+				continue
+			}
+			ip := ntHopIP(h.Address)
+			asn := ""
+			if h.Geo != nil && h.Geo.Asnumber != "" {
+				asn = strings.TrimPrefix(strings.TrimPrefix(h.Geo.Asnumber, "AS"), "as")
+			}
+			hs = append(hs, hopInfo{IP: ip, ASN: asn})
+		}
+	}
+	return analyzeHops(hs)
+}
+
+// analyzeTraceroute 从系统 traceroute 输出算标签与三段(无 ASN).
+func analyzeTraceroute(out string) (label, exit, border, domestic string) {
+	seen := map[string]bool{}
+	var hs []hopInfo
+	for _, m := range hopRe.FindAllStringSubmatch(out, -1) {
+		ip := m[1]
+		if seen[ip] {
+			continue
+		}
+		seen[ip] = true
+		hs = append(hs, hopInfo{IP: ip})
+	}
+	return analyzeHops(hs)
 }
 
 // 用 nexttrace 测到目标的线路(-M 关掉 maptrace, 否则其 API 失败会吞掉 JSON 输出)。
 // nexttrace 不可用、运行失败或解析失败时返回 nil, 由调用方回落到系统 traceroute。
-func routeViaNexttrace(target string) *string {
+func routeViaNexttrace(target string) *routeResult {
 	if _, err := exec.LookPath("nexttrace"); err != nil {
 		return nil
 	}
@@ -784,8 +855,8 @@ func routeViaNexttrace(target string) *string {
 		logf("nexttrace 输出解析失败(%s): %v", target, err)
 		return nil
 	}
-	label := classifyNtHops(res.Hops)
-	return &label
+	label, exit, border, domestic := analyzeNtHops(res.Hops)
+	return &routeResult{Label: label, Seg: routeSeg{Exit: exit, Border: border, Domestic: domestic}}
 }
 
 // routesDue 本轮是否该重测线路(首次或已到预约时间)。
@@ -834,13 +905,42 @@ func mergeRouteCache(dst, src map[string]map[string]*string) map[string]map[stri
 
 // pickCarrierLabel 从一个运营商的多个杭州 IP 测试结果里取第一个能分类的线路,
 // 都测不出则为未知。
-func pickCarrierLabel(targets []string, results map[string]*string) string {
+func pickCarrierLabel(targets []string, results map[string]*routeResult) string {
 	for _, target := range targets {
-		if rt := results[target]; rt != nil && *rt != "未知" {
-			return *rt
+		if rt := results[target]; rt != nil && rt.Label != "未知" {
+			return rt.Label
 		}
 	}
 	return "未知"
+}
+
+// pickCarrierSeg 与 pickCarrierLabel 取同一目标的三段(标签与三段来自同一次探测)。
+func pickCarrierSeg(targets []string, results map[string]*routeResult) *routeSeg {
+	for _, target := range targets {
+		if rt := results[target]; rt != nil && rt.Label != "未知" {
+			seg := rt.Seg
+			return &seg
+		}
+	}
+	return nil
+}
+
+// mergeRouteSegCache 三段缓存: 只用真实结果覆盖, 测不出不覆盖好结果(与 mergeRouteCache 同规则)。
+func mergeRouteSegCache(dst, src map[string]map[string]*routeSeg) map[string]map[string]*routeSeg {
+	if dst == nil {
+		dst = map[string]map[string]*routeSeg{}
+	}
+	for k, cities := range src {
+		if dst[k] == nil {
+			dst[k] = map[string]*routeSeg{}
+		}
+		for city, seg := range cities {
+			if seg != nil {
+				dst[k][city] = seg
+			}
+		}
+	}
+	return dst
 }
 
 // hasRouteResult 是否已有至少一个城市的真实线路结果。
@@ -899,26 +999,26 @@ func (c *collector) collect(node string) report {
 	// 线路探测降频: 指标每轮都采, 线路(nexttrace/traceroute)有结果时默认 24 小时才重测一次,
 	// 无结果时 5 分钟重试; 期间用上次的结果, 避免高频探测被运营商/防火墙风控。
 	probeRoutes := c.routesDue(now)
-	var ipResults map[string]map[string]*string
+	var ipResults map[string]map[string]*routeResult
 	if probeRoutes {
 		// 去程线路: 每运营商 2 个杭州 IP 各测一次, 并发执行, 互为备份;
 		// 优先 nexttrace(逐跳 ASN), 不可用或失败时回落系统 traceroute+网段表
-		ipResults = map[string]map[string]*string{}
+		ipResults = map[string]map[string]*routeResult{}
 		for k, targets := range routeTargets {
 			for _, target := range targets {
 				wg.Add(1)
 				go func(k, target string) {
 					defer wg.Done()
 					rt := routeViaNexttrace(target)
-					if rt == nil || *rt == "未知" {
+					if rt == nil || rt.Label == "未知" {
 						// nexttrace 没装/失败, 或跑了但判不出线路, 再试系统 traceroute+网段表
-						if tr := tracerouteOne(target); tr != nil && *tr != "未知" {
+						if tr := tracerouteOne(target); tr != nil && tr.Label != "未知" {
 							rt = tr
 						}
 					}
 					mu.Lock()
 					if ipResults[k] == nil {
-						ipResults[k] = map[string]*string{}
+						ipResults[k] = map[string]*routeResult{}
 					}
 					ipResults[k][target] = rt
 					mu.Unlock()
@@ -927,20 +1027,31 @@ func (c *collector) collect(node string) report {
 		}
 	}
 	wg.Wait()
+	var routeSegs map[string]map[string]*routeSeg
 	if probeRoutes {
 		// 每运营商取第一个能分类的 IP 的线路, 都测不出则为未知; 缓存并预约下次探测。
+		routeSegs = map[string]map[string]*routeSeg{}
 		for k, targets := range routeTargets {
 			label := pickCarrierLabel(targets, ipResults[k])
 			if route[k] == nil {
 				route[k] = map[string]*string{}
 			}
 			route[k]["hz"] = &label
+			if seg := pickCarrierSeg(targets, ipResults[k]); seg != nil {
+				if routeSegs[k] == nil {
+					routeSegs[k] = map[string]*routeSeg{}
+				}
+				routeSegs[k]["hz"] = seg
+			}
 		}
 		c.lastRoute = mergeRouteCache(c.lastRoute, route)
 		route = c.lastRoute
+		c.lastRouteSegs = mergeRouteSegCache(c.lastRouteSegs, routeSegs)
+		routeSegs = c.lastRouteSegs
 		c.scheduleNextRoute(time.Now())
 	} else {
 		route = c.lastRoute
+		routeSegs = c.lastRouteSegs
 	}
 
 	// 回程探测: 从本机(国内) traceroute 到目标 VPS, 分类后随本轮上报。
@@ -956,9 +1067,9 @@ func (c *collector) collect(node string) report {
 				rwg.Add(1)
 				go func(t returnTarget) {
 					defer rwg.Done()
-					if label := tracerouteOne(t.ip); label != nil && *label != "未知" {
+					if res := tracerouteOne(t.ip); res != nil && res.Label != "未知" {
 						rmu.Lock()
-						ret[t.node] = *label
+						ret[t.node] = res.Label
 						rmu.Unlock()
 					}
 				}(t)
@@ -983,7 +1094,7 @@ func (c *collector) collect(node string) report {
 		DiskTotal: diskTotal, DiskUsed: diskUsed,
 		NetRx: c.cumRx, NetTx: c.cumTx,
 		NetRxRate: rxRate, NetTxRate: txRate,
-		Ping: ping, Route: route,
+		Ping: ping, Route: route, RouteSegs: routeSegs,
 	}
 	return r
 }

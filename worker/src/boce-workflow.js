@@ -97,6 +97,57 @@ function classifyRoute(route) {
   return best;
 }
 
+function routeSegments(route) {
+  // 去程三段(国内 -> 海外): hops 为 {"rtt": n, "ip": "x.x.x.x"} 数组(或 JSON 字符串).
+  // domestic 为国内跳点的骨干(163/CN2 看先后分 GT/GIA); exit 为最后国内跳点的 IP;
+  // border 为最后国内标签 -> 海外(海外跳点能判出则写它). 国内跳点 = 能判出线路且非 218.30.
+  // (218.30.可为美国出口, 如 218.30.48.73, 靠前缀分不出国内外, 须排除).
+  // 找不到国内跳点时返回 null.
+  let hops = route;
+  if (typeof hops === 'string') {
+    try { hops = JSON.parse(hops); } catch { return null; }
+  }
+  if (!Array.isArray(hops)) return null;
+  const labels = [];
+  const domesticIdx = [];
+  for (let i = 0; i < hops.length; i++) {
+    const hop = hops[i];
+    let label = '';
+    let ip = '';
+    if (hop && typeof hop === 'object') {
+      ip = hop.ip || '';
+      label = classifyIP(ip);
+    }
+    labels.push(label);
+    if (label && !ip.startsWith('218.30.')) domesticIdx.push(i);
+  }
+  if (domesticIdx.length === 0) return null;
+  const lastDom = domesticIdx[domesticIdx.length - 1];
+  const exit = hops[lastDom].ip || '';
+  // 国内骨干: 国内跳点的标签按 163/CN2 先后分 GT/GIA, 其他取最先出现
+  const firstIdx = {};
+  for (const i of domesticIdx) {
+    const lb = labels[i];
+    if (lb && !(lb in firstIdx)) firstIdx[lb] = i;
+  }
+  let domestic = '';
+  if ('163' in firstIdx && 'CN2' in firstIdx) {
+    domestic = firstIdx['163'] < firstIdx['CN2'] ? 'CN2 GT' : 'CN2';
+  } else {
+    let best = Object.keys(firstIdx)[0];
+    for (const k of Object.keys(firstIdx)) if (firstIdx[k] < firstIdx[best]) best = k;
+    domestic = best;
+  }
+  // 跨境: 最后国内标签 -> 海外(其后若有能判出的跳点则写它)
+  const lastLabel = labels[lastDom];
+  let nextLabel = '';
+  for (let i = lastDom + 1; i < hops.length; i++) {
+    if (labels[i]) { nextLabel = labels[i]; break; }
+  }
+  const border = nextLabel && nextLabel !== lastLabel ? lastLabel + ' → ' + nextLabel : lastLabel + ' → 海外';
+  return { exit, border, domestic };
+}
+
 function routeIsEmpty(route) {
   let hops = route;
   if (typeof hops === 'string') {
@@ -327,7 +378,7 @@ export class BoceWorkflow extends WorkflowEntrypoint {
           const r = res[carrier];
           if (!r) continue;
           const label = r.city ? `${r.city} ${r.line}` : r.line;
-          const val = JSON.stringify({ route: label, ts: Math.floor(Date.now() / 1000) });
+          const val = JSON.stringify({ route: label, ts: Math.floor(Date.now() / 1000), segments: r.segments || null });
           await step.do(`r${round}-kv-${nodeId}-${carrier}`, () =>
             env.PROBE_KV.put(`return:${nodeId}:${carrier}`, val, { expirationTtl: RETURN_TTL }));
         }
@@ -371,7 +422,7 @@ export class BoceWorkflow extends WorkflowEntrypoint {
         if ((r.errorCode || 0) !== 0) continue;
         const route = r.route || '';
         if (routeIsEmpty(route)) continue;
-        res[carrier] = { city: r.cityCN || '', line: classifyRoute(route) };
+        res[carrier] = { city: r.cityCN || '', line: classifyRoute(route), segments: routeSegments(route) };
       }
       return res;
     };

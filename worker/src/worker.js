@@ -100,6 +100,27 @@ function validatePing(p) {
   return null;
 }
 
+function validateRouteSegs(r) {
+  // 与 route 同结构(ct/cu/cm -> hz), 每值 {exit, border, domestic} 三段均为字符串(可空); 旧 agent 不发此字段时不校验
+  if (r === null || typeof r !== "object" || Array.isArray(r)) return "route_segments 格式错误";
+  for (const k of Object.keys(r)) {
+    if (!["ct", "cu", "cm"].includes(k)) return "route_segments 含未知字段";
+    const v = r[k];
+    if (v === null) continue;
+    if (typeof v !== "object" || Array.isArray(v)) return "route_segments." + k + " 格式错误";
+    for (const city of Object.keys(v)) {
+      const seg = v[city];
+      if (seg === null) continue;
+      if (typeof seg !== "object" || Array.isArray(seg)) return "route_segments." + k + "." + city + " 格式错误";
+      for (const f of ["exit", "border", "domestic"]) {
+        if (seg[f] !== undefined && seg[f] !== null && typeof seg[f] !== "string") return "route_segments." + k + "." + city + "." + f + " 非法";
+        if (typeof seg[f] === "string" && seg[f].length > 128) return "route_segments." + k + "." + city + "." + f + " 过长";
+      }
+    }
+  }
+  return null;
+}
+
 function validateRoute(r) {
   if (r === null || typeof r !== "object" || Array.isArray(r)) return "route 格式错误";
   for (const k of ["ct", "cu", "cm"]) {
@@ -128,7 +149,7 @@ function validateRoute(r) {
 function validateReport(d) {
   if (d === null || typeof d !== "object" || Array.isArray(d)) return "body 必须是 JSON 对象";
   const allowed = new Set(["node", "name", "carrier", "return_routes", "ts", "hostname", "uptime", "cpu", "load", "mem_total", "mem_used",
-    "disk_total", "disk_used", "net_rx", "net_tx", "net_rx_rate", "net_tx_rate", "ping", "route"]);
+    "disk_total", "disk_used", "net_rx", "net_tx", "net_rx_rate", "net_tx_rate", "ping", "route", "route_segments"]);
   for (const k of Object.keys(d)) if (!allowed.has(k)) return "未知字段: " + k;
   if (typeof d.node !== "string" || !NODE_RE.test(d.node)) return "node 非法";
   if (d.carrier !== undefined) {
@@ -160,6 +181,10 @@ function validateReport(d) {
   if (pe) return pe;
   const re = validateRoute(d.route);
   if (re) return re;
+  if (d.route_segments !== undefined) {
+    const se = validateRouteSegs(d.route_segments);
+    if (se) return se;
+  }
   return null;
 }
 
@@ -350,10 +375,12 @@ async function handleStatus(env) {
     // (测出正常线路后 7 天才重测, 没测出则 5 分钟后重试; 值必须在 KV 里留够 7 天)
     const retRaw = await Promise.all(["ct", "cu", "cm"].map((c) => env.PROBE_KV.get("return:" + id + ":" + c)));
     const ret = {};
+    const retSegs = {};
     ["ct", "cu", "cm"].forEach((c, i) => {
-      let v = null;
-      if (retRaw[i]) { try { const p = JSON.parse(retRaw[i]); if (p && p.route && now - p.ts < 691200) v = p.route; } catch { /* 忽略损坏记录 */ } }
+      let v = null, s = null;
+      if (retRaw[i]) { try { const p = JSON.parse(retRaw[i]); if (p && p.route && now - p.ts < 691200) { v = p.route; s = p.segments || null; } } catch { /* 忽略损坏记录 */ } }
       ret[c] = v;
+      retSegs[c] = s;
     });
     nodes.push({
       id,
@@ -363,6 +390,7 @@ async function handleStatus(env) {
       data: parsed.data,
       meta,
       ret,
+      retSegs,
       ip: parsed.ip || null,
     });
   }
@@ -510,6 +538,8 @@ th,td{padding:8px 4px;text-align:left;border-bottom:1px solid #eef0f4}
 th{color:#8a90a0;font-weight:500;font-size:12px}
 .route-tag{display:inline-block;padding:2px 10px;border-radius:99px;background:#fef3c7;color:#92400e;font-size:13px;margin:1px 4px 1px 0}
 .route-tag.unknown{background:#f1f5f9;color:#64748b}
+.segs{margin-top:4px;font-size:12px;color:#64748b;line-height:1.5}
+.seg{white-space:nowrap}
 .note{color:#8a90a0;font-size:12px;margin-top:10px}
 .metaform{margin-top:16px;padding-top:14px;border-top:1px solid #eef0f4;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .metaform input{padding:8px 10px;border:1px solid #d8dce6;border-radius:8px;font-size:13px;width:120px}
@@ -566,6 +596,23 @@ function cityTags(r){
   return out==='' ? '<span class="route-tag unknown">未知</span>' : out.trim();
 }
 function retTag(v){if(!v)return '<span class="route-tag unknown">—</span>';var label=String(v).split(' ').pop();return '<span class="route-tag">'+esc(lineDisplay(label))+'</span>'}
+// 三段小字: 出口/跨境/国内, 无数据时不显示
+function segHtml(seg){
+  if(!seg||typeof seg!=='object') return '';
+  var out='';
+  if(seg.exit) out+='<div class="seg">出口：'+esc(seg.exit)+'</div>';
+  if(seg.border) out+='<div class="seg">跨境：'+esc(seg.border)+'</div>';
+  if(seg.domestic) out+='<div class="seg">国内：'+esc(seg.domestic)+'</div>';
+  return out ? '<div class="segs">'+out+'</div>' : '';
+}
+// 回程三段: agent 上报的 route_segments, 结构与 route 同形(ct/cu/cm -> hz -> {exit,border,domestic})
+function routeSegOf(segs, carrier){
+  if(!segs||typeof segs!=='object') return null;
+  var c=segs[carrier];
+  if(!c||typeof c!=='object') return null;
+  if(typeof c==='string') return null;
+  return c.hz||c.sh||c.gz||c.bj||null;
+}
 // 圆盘指针仪表: 240 度表盘(左下 210 度经顶部到右下 -30 度), 指针指向数值, 颜色随阈值变
 function polar(cx,cy,r,deg){var a=deg*Math.PI/180;return [cx+r*Math.cos(a),cy-r*Math.sin(a)]}
 function arcD(cx,cy,r,a0,a1){var s=polar(cx,cy,r,a0),e=polar(cx,cy,r,a1);var large=(a0-a1)>180?1:0;return 'M '+s[0].toFixed(1)+' '+s[1].toFixed(1)+' A '+r+' '+r+' 0 '+large+' 1 '+e[0].toFixed(1)+' '+e[1].toFixed(1)}
@@ -633,9 +680,9 @@ function render(nodes,now){
    +'<div class="t-right"><div class="t-rate">↑ '+fmtRate(d.net_tx_rate)+'　↓ '+fmtRate(d.net_rx_rate)+'</div><div class="small">累计 ↑ '+fmtBytes(d.net_tx)+'　↓ '+fmtBytes(d.net_rx)+'</div></div></div>';
   h+='<div class="ping">'+pingRow('电信',d.ping.ct)+pingRow('联通',d.ping.cu)+pingRow('移动',d.ping.cm)+'</div>';
   h+='<table><tr><th>三网线路</th><th>去程</th><th>回程</th></tr>'
-   +'<tr><td>电信</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td><td>'+cityTags(d.route.ct)+'</td></tr>'
-   +'<tr><td>联通</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td><td>'+cityTags(d.route.cu)+'</td></tr>'
-   +'<tr><td>移动</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td><td>'+cityTags(d.route.cm)+'</td></tr></table>'
+   +'<tr><td>电信</td><td>'+retTag(n.ret?n.ret.ct:null)+segHtml(n.retSegs?n.retSegs.ct:null)+'</td><td>'+cityTags(d.route.ct)+segHtml(routeSegOf(d.route_segments,'ct'))+'</td></tr>'
+   +'<tr><td>联通</td><td>'+retTag(n.ret?n.ret.cu:null)+segHtml(n.retSegs?n.retSegs.cu:null)+'</td><td>'+cityTags(d.route.cu)+segHtml(routeSegOf(d.route_segments,'cu'))+'</td></tr>'
+   +'<tr><td>移动</td><td>'+retTag(n.ret?n.ret.cm:null)+segHtml(n.retSegs?n.retSegs.cm:null)+'</td><td>'+cityTags(d.route.cm)+segHtml(routeSegOf(d.route_segments,'cm'))+'</td></tr></table>'
    +'<div class="note">去程线路由 boce.aliyun.com 探针(杭州优先)探测, 测出线路后 7 天再测, 未测出 5 分钟后重试, 未探测时显示 —。回程线路为本节点向杭州目标探测的结果。数据 '+timeAgo(n.lastSeen)+'更新。</div>'
    +'<div class="routes-actions"><button class="refresh-routes" data-node="'+esc(n.id)+'">立即检测</button><span class="refresh-status" id="rs-'+esc(n.id)+'"></span></div>';
   h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button class="save" data-node="'+esc(n.id)+'">保存设置</button><button class="del" data-node="'+esc(n.id)+'">删除节点</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';

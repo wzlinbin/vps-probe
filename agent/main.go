@@ -102,10 +102,11 @@ type report struct {
 }
 
 // 三网探测目标(各家常用 DNS, 可被环境变量覆盖 PROBE_PING_CT/CU/CM)
-var pingTargets = map[string]string{
-	"ct": "114.114.114.114", // 电信
-	"cu": "123.125.81.6",    // 联通
-	"cm": "211.136.17.107",  // 移动
+var pingTargets = map[string][]string{
+	// 每运营商多个目标: 主目标 100% 丢包时自动换备用目标重测
+	"ct": {"114.114.114.114", "202.96.128.86", "61.139.2.69"}, // 电信
+	"cu": {"123.125.81.6", "210.21.196.6"},                   // 联通
+	"cm": {"211.136.17.107", "120.196.165.24"},               // 移动
 }
 
 // ---------- 采集 ----------
@@ -368,7 +369,19 @@ func pingOne(target string) *pingResult {
 	return r
 }
 
-// 线路分类: 按跳点 IP 的网段启发式判断, 命中即返回, 命中不了返回"未知"。
+// 逐个试目标, 第一个有回包的为准; 全不通则返回最后一个的结果(100% 丢包)。
+func pingWithFallback(targets []string) (*pingResult, string) {
+	var last *pingResult
+	used := targets[0]
+	for _, t := range targets {
+		p := pingOne(t)
+		last, used = p, t
+		if p != nil && p.Avg != nil {
+			break
+		}
+	}
+	return last, used
+}
 // 163: 202.97/16, 59.43/16; 9929: 219.158/16, 210.22/16;
 // CMIN2: 223.96/16, 223.99/16, 211.136/16, 183.240/16, 120.196/16, 117.128/16;
 // 4837(联通169): 218.105/16。
@@ -398,10 +411,26 @@ func tracerouteOne(target string) *string {
 	if _, err := exec.LookPath("traceroute"); err != nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	out, _ := runCmd(ctx, "traceroute", "-n", "-m", "15", "-w", "1", "-q", "1", target)
+	// 先 ICMP 模式(-I, 沿途路由器回包率高), 命中不了再回落 UDP
+	out, _ := runCmd(ctx, "traceroute", "-I", "-n", "-m", "20", "-w", "2", "-q", "1", target)
+	if label := classifyRoute(out); label != "" {
+		return &label
+	}
+	if ctx.Err() != nil {
+		unknown := "未知"
+		return &unknown
+	}
+	out, _ = runCmd(ctx, "traceroute", "-n", "-m", "20", "-w", "2", "-q", "1", target)
+	if label := classifyRoute(out); label != "" {
+		return &label
+	}
 	unknown := "未知"
+	return &unknown
+}
+
+func classifyRoute(out string) string {
 	seen := map[string]bool{}
 	for _, m := range hopRe.FindAllStringSubmatch(out, -1) {
 		ip := m[1]
@@ -414,10 +443,10 @@ func tracerouteOne(target string) *string {
 			continue // 跳过内网跳点
 		}
 		if label := classifyIP(ip); label != "" {
-			return &label
+			return label
 		}
 	}
-	return &unknown
+	return ""
 }
 
 // ---------- 采集入口 ----------
@@ -467,17 +496,17 @@ func (c *collector) collect(node string) report {
 	route := map[string]*string{}
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	for k, target := range pingTargets {
+	for k, targets := range pingTargets {
 		wg.Add(1)
-		go func(k, target string) {
+		go func(k string, targets []string) {
 			defer wg.Done()
-			p := pingOne(target)
-			rt := tracerouteOne(target)
+			p, used := pingWithFallback(targets)
+			rt := tracerouteOne(used)
 			mu.Lock()
 			ping[k] = p
 			route[k] = rt
 			mu.Unlock()
-		}(k, target)
+		}(k, targets)
 	}
 	wg.Wait()
 
@@ -551,7 +580,7 @@ func main() {
 	cfg := loadConfig()
 	for k, env := range map[string]string{"ct": "PROBE_PING_CT", "cu": "PROBE_PING_CU", "cm": "PROBE_PING_CM"} {
 		if v := os.Getenv(env); v != "" {
-			pingTargets[k] = v
+			pingTargets[k] = []string{v}
 		}
 	}
 

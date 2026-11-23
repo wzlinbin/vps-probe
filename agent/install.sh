@@ -47,8 +47,8 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_PATH="$SCRIPT_DIR/$BIN"
 if [ ! -f "$BIN_PATH" ]; then
-  # 本地没有二进制, 从 GitHub Release 下载
-  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/download/v1.0.6"
+  # 本地没有二进制, 从 GitHub Release 下载(用 latest, 重跑即升级到最新版, 不要写死版本号)
+  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/latest/download"
   echo "本地没有 $BIN, 从 $RELEASE_BASE 下载..."
   command -v curl >/dev/null || { echo "需要 curl 才能下载二进制" >&2; exit 1; }
   BIN_PATH="$(mktemp)"

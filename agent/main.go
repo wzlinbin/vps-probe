@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
@@ -613,8 +614,43 @@ func logf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }
 
+// 未指定节点 id 时按主机名自动生成: 小写、非法字符变连字符、去重/去首尾连字符、最长 32 位;
+// 主机名无效时用 node- + 6 位随机 hex。
+func deriveNodeID() string {
+	hn, _ := os.Hostname()
+	s := strings.ToLower(hn)
+	var b strings.Builder
+	lastDash := true
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+		} else if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	id := strings.Trim(b.String(), "-")
+	if len(id) > 32 {
+		id = strings.Trim(id[:32], "-")
+	}
+	if id == "" {
+		var rb [3]byte
+		if _, err := rand.Read(rb[:]); err != nil {
+			n := time.Now().UnixNano()
+			rb = [3]byte{byte(n), byte(n >> 8), byte(n >> 16)}
+		}
+		id = fmt.Sprintf("node-%x", rb)
+	}
+	return id
+}
+
 func main() {
 	cfg := loadConfig()
+	if cfg.Node == "" {
+		cfg.Node = deriveNodeID()
+		logf("未指定节点 id, 已按主机名自动生成: %s", cfg.Node)
+	}
 	for k, env := range map[string]string{"ct": "PROBE_PING_CT", "cu": "PROBE_PING_CU", "cm": "PROBE_PING_CM"} {
 		if v := os.Getenv(env); v != "" {
 			pingTargets[k] = []string{v}
@@ -653,8 +689,8 @@ func main() {
 		return
 	}
 
-	if cfg.URL == "" || cfg.Token == "" || cfg.Node == "" {
-		fmt.Fprintln(os.Stderr, "缺少必要参数: -url、-token、-node (或环境变量 PROBE_URL/PROBE_TOKEN/PROBE_NODE)")
+	if cfg.URL == "" || cfg.Token == "" {
+		fmt.Fprintln(os.Stderr, "缺少必要参数: -url、-token (或环境变量 PROBE_URL/PROBE_TOKEN)")
 		os.Exit(2)
 	}
 	if !cfg.AllowHTTP && !strings.HasPrefix(cfg.URL, "https://") {

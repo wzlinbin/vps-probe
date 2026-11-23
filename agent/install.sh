@@ -1,8 +1,7 @@
 #!/bin/bash
 # 在 VPS 上安装 vps-probe-agent (需 root)
-# 用法: sudo bash install.sh <Worker地址> <上报token> <节点id> [显示名] [运营商ct/cu/cm] [回程目标, 如 la:1.2.3.4]
-# 示例(海外节点): sudo bash install.sh https://vps-probe.xxx.workers.dev <token> la "洛杉矶"
-# 示例(国内探测节点, 测回程): sudo bash install.sh https://vps-probe.xxx.workers.dev <token> gz-ct "广州电信" ct "la:<LA 节点公网 IP>"
+# 用法: sudo bash install.sh <Worker地址> <上报token> [节点id] [显示名] [运营商ct/cu/cm] [回程目标, 如 la:1.2.3.4]
+# 节点 id 不写则按主机名自动生成; 显示名也可在面板上改
 # 缺失的 traceroute/ping 会自动尝试安装; 本地没有二进制时自动从 GitHub Release 下载
 set -euo pipefail
 
@@ -17,9 +16,15 @@ NODE="${3:-}"
 NAME="${4:-}"
 CARRIER="${5:-}"
 RETURNS="${6:-}"
-if [ -z "$URL" ] || [ -z "$TOKEN" ] || [ -z "$NODE" ]; then
-  echo "用法: sudo bash $0 <Worker地址> <上报token> <节点id> [显示名] [运营商ct/cu/cm] [回程目标, 如 la:1.2.3.4]" >&2
+if [ -z "$URL" ] || [ -z "$TOKEN" ]; then
+  echo "用法: sudo bash $0 <Worker地址> <上报token> [节点id] [显示名] [运营商ct/cu/cm] [回程目标, 如 la:1.2.3.4]" >&2
   exit 1
+fi
+# 节点 id 不写则按主机名自动生成(小写、非法字符变连字符、最长 32 位)
+if [ -z "$NODE" ]; then
+  NODE="$(hostname 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed -E -e 's/[^a-z0-9]+/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-32 | sed -e 's/-$//')"
+  if [ -z "$NODE" ]; then NODE="node-$(head -c 3 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi
+  echo "未指定节点 id, 已按主机名自动生成: $NODE"
 fi
 # 重装时没给显示名, 沿用上次的
 if [ -z "$NAME" ] && [ -f /etc/vps-probe/env ]; then
@@ -43,7 +48,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_PATH="$SCRIPT_DIR/$BIN"
 if [ ! -f "$BIN_PATH" ]; then
   # 本地没有二进制, 从 GitHub Release 下载
-  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/download/v1.0.3"
+  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/download/v1.0.4"
   echo "本地没有 $BIN, 从 $RELEASE_BASE 下载..."
   command -v curl >/dev/null || { echo "需要 curl 才能下载二进制" >&2; exit 1; }
   BIN_PATH="$(mktemp)"

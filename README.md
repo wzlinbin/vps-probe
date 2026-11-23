@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/insta
 # 例如: curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <token> la "洛杉矶"
 ```
 
-第 4 个参数是面板上显示的名字, 不填则显示节点 id; 重装时不给也会沿用上次的。
+第 4 个参数是 agent 上报的初始显示名; 也可以直接在面板上改: 每台机器下方设置栏第一个输入框就是备注, 保存后立即生效, 面板上的备注优先于命令里给的名字。
 install.sh 会自动安装缺失的 traceroute/ping(apt/dnf/yum/apk), 装不上只警告、不中断安装。
 
 安装脚本会: 装二进制到 /usr/local/bin、写 600 权限的 /etc/vps-probe/env、
@@ -53,7 +53,7 @@ install.sh 会自动安装缺失的 traceroute/ping(apt/dnf/yum/apk), 装不上�
 ## 面板功能
 
 - 登录后查看各节点: CPU/内存/硬盘(圆盘指针仪表)、流量、上下行速率、三网延迟条、去程线路
-- 节点可自定义显示名(agent 的 -name / PROBE_NAME, 不填显示节点 id)
+- 节点显示名直接在面板上改: 每台机器下方设置栏第一个输入框就是备注, 保存后立即生效; 没填备注时显示 agent 上报的名字或节点 id
 - 每个节点可设置流量配额 GB、到期日、月费(面板"保存设置"), 用于显示流量占比和剩余天数
 - 在线判断: 120 秒内有上报算在线; "在线 X 天"按首次上报时间算
 - 每 5 秒自动刷新

@@ -272,6 +272,10 @@ async function handleMeta(request, env) {
   }
   if (typeof body.node !== "string" || !NODE_RE.test(body.node)) return json({ error: "node 非法" }, 400);
   const meta = {};
+  if (body.name !== undefined && body.name !== null) {
+    if (typeof body.name !== "string" || body.name.length > 32 || /[\x00-\x1f\x7f]/.test(body.name)) return json({ error: "name 非法" }, 400);
+    meta.name = body.name;
+  }
   if (body.quotaGB !== undefined && body.quotaGB !== null) {
     if (!isNum(body.quotaGB, 0, 1000000)) return json({ error: "quotaGB 非法" }, 400);
     meta.quotaGB = body.quotaGB;
@@ -395,7 +399,7 @@ function render(nodes,now){
   var quotaPct=m.quotaGB?pct(traffic,m.quotaGB*1073741824):null;
   var remain='';
   if(m.expiresAt){var days=Math.ceil((new Date(m.expiresAt+'T00:00:00Z').getTime()-Date.now())/86400000);remain='剩余 '+days+' 天';}
-  var displayName=(d.name&&d.name.length?d.name:n.id);
+  var displayName=(m.name&&m.name.length?m.name:(d.name&&d.name.length?d.name:n.id));
   var idSuffix=(displayName!==n.id)?' · '+esc(n.id):'';
   h+='<div class="card"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 在线 '+daysSince(n.firstSeen)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
   h+='<div class="grid">'
@@ -411,15 +415,15 @@ function render(nodes,now){
    +'<tr><td>联通</td><td>'+routeTag(d.route.cu)+'</td><td><span class="route-tag unknown">—</span></td></tr>'
    +'<tr><td>移动</td><td>'+routeTag(d.route.cm)+'</td><td><span class="route-tag unknown">—</span></td></tr></table>'
    +'<div class="note">回程线路需国内节点探测, 当前未测。数据 '+timeAgo(n.lastSeen)+'更新。</div>';
-  h+='<div class="metaform"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button data-node="'+esc(n.id)+'">保存设置</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
+  h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button data-node="'+esc(n.id)+'">保存设置</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
   h+='</div>';
  });
  list.innerHTML=h;
  list.querySelectorAll('.metaform button').forEach(function(btn){
   btn.addEventListener('click',function(){
    var id=btn.getAttribute('data-node');
-   var q=document.getElementById('q-'+id).value,e=document.getElementById('e-'+id).value,p=document.getElementById('p-'+id).value;
-   fetch('/api/meta',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({node:id,quotaGB:q===''?null:Number(q),expiresAt:e==='' ?null:e,price:p==='' ?null:p})}).then(function(r){return r.json()}).then(function(j){document.getElementById('s-'+id).textContent=j.ok?'已保存':'保存失败: '+(j.error||'');if(j.ok)load()});
+   var q=document.getElementById('q-'+id).value,e=document.getElementById('e-'+id).value,p=document.getElementById('p-'+id).value,nm=document.getElementById('n-'+id).value;
+   fetch('/api/meta',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({node:id,name:nm==='' ?null:nm,quotaGB:q===''?null:Number(q),expiresAt:e==='' ?null:e,price:p==='' ?null:p})}).then(function(r){return r.json()}).then(function(j){document.getElementById('s-'+id).textContent=j.ok?'已保存':'保存失败: '+(j.error||'');if(j.ok)load()});
   });
  });
 }

@@ -120,7 +120,7 @@ type report struct {
 	NetRxRate    uint64                        `json:"net_rx_rate"` // B/s
 	NetTxRate    uint64                        `json:"net_tx_rate"` // B/s
 	Ping         map[string]*pingResult        `json:"ping"`        // ct/cu/cm
-	Route        map[string]map[string]*string `json:"route"`       // ct/cu/cm -> sh/gz/bj -> 163/CN2/9929/4837/CMIN2/9808/未知
+	Route        map[string]map[string]*string `json:"route"`       // ct/cu/cm -> hz(杭州) -> 163/CN2/9929/4837/CMIN2/9808/未知
 }
 
 // 三网探测目标(各家常用 DNS, 可被环境变量覆盖 PROBE_PING_CT/CU/CM)
@@ -131,12 +131,12 @@ var pingTargets = map[string][]string{
 	"cm": {"211.136.17.107", "120.196.165.24"},                // 移动
 }
 
-// 去程线路探测目标: 每运营商 3 个城市骨干节点, 用于区分线路类型
-// (电信 163/CN2, 联通 4837/9929, 移动 9808/CMIN2)。
-var routeTargets = map[string]map[string]string{
-	"ct": {"sh": "101.95.120.1", "gz": "14.215.116.1", "bj": "219.141.136.10"},     // 电信 上海/广州/北京
-	"cu": {"sh": "112.65.63.1", "gz": "210.21.196.6", "bj": "123.125.99.1"},        // 联通 上海/广州/北京
-	"cm": {"sh": "120.204.197.1", "gz": "120.196.165.24", "bj": "221.179.155.161"}, // 移动 上海/广州/北京
+// 去程线路探测目标: 杭州, 每运营商 2 个 IP 互为备份, 用于区分线路类型
+// (电信 163/CN2, 联通 4837/9929, 移动 9808/CMIN2); 任一能分类即为该运营商的杭州线路。
+var routeTargets = map[string][]string{
+	"ct": {"115.239.211.112", "122.224.186.100"}, // 电信 杭州 IDC
+	"cu": {"101.68.73.100", "221.12.1.227"},     // 联通 杭州 IDC / DNS(53 端口)
+	"cm": {"223.95.78.100", "112.17.0.100"},     // 移动 杭州数据中心 / 城域骨干
 }
 
 // ---------- 采集 ----------
@@ -670,17 +670,26 @@ func mergeRouteCache(dst, src map[string]map[string]*string) map[string]map[stri
 		}
 	}
 	unknown := "未知"
-	for k, cities := range routeTargets {
+	for k := range routeTargets {
 		if dst[k] == nil {
 			dst[k] = map[string]*string{}
 		}
-		for city := range cities {
-			if dst[k][city] == nil {
-				dst[k][city] = &unknown
-			}
+		if dst[k]["hz"] == nil {
+			dst[k]["hz"] = &unknown
 		}
 	}
 	return dst
+}
+
+// pickCarrierLabel 从一个运营商的多个杭州 IP 测试结果里取第一个能分类的线路,
+// 都测不出则为未知。
+func pickCarrierLabel(targets []string, results map[string]*string) string {
+	for _, target := range targets {
+		if rt := results[target]; rt != nil && *rt != "未知" {
+			return *rt
+		}
+	}
+	return "未知"
 }
 
 // hasRouteResult 是否已有至少一个城市的真实线路结果。
@@ -752,16 +761,18 @@ func (c *collector) collect(node string) report {
 			mu.Unlock()
 		}(k, targets)
 	}
-	// 线路探测降频: 指标每轮都采, 线路(nexttrace/traceroute)默认每 5 分钟才重测一次,
-	// 期间用上次的结果, 避免高频探测被运营商/防火墙风控。
+	// 线路探测降频: 指标每轮都采, 线路(nexttrace/traceroute)有结果时默认 24 小时才重测一次,
+	// 无结果时 5 分钟重试; 期间用上次的结果, 避免高频探测被运营商/防火墙风控。
 	probeRoutes := c.routesDue(now)
+	var ipResults map[string]map[string]*string
 	if probeRoutes {
-		// 去程线路: 每运营商 3 个城市各测一次, 并发执行;
+		// 去程线路: 每运营商 2 个杭州 IP 各测一次, 并发执行, 互为备份;
 		// 优先 nexttrace(逐跳 ASN), 不可用或失败时回落系统 traceroute+网段表
-		for k, cities := range routeTargets {
-			for city, target := range cities {
+		ipResults = map[string]map[string]*string{}
+		for k, targets := range routeTargets {
+			for _, target := range targets {
 				wg.Add(1)
-				go func(k, city, target string) {
+				go func(k, target string) {
 					defer wg.Done()
 					rt := routeViaNexttrace(target)
 					if rt == nil || *rt == "未知" {
@@ -771,18 +782,25 @@ func (c *collector) collect(node string) report {
 						}
 					}
 					mu.Lock()
-					if route[k] == nil {
-						route[k] = map[string]*string{}
+					if ipResults[k] == nil {
+						ipResults[k] = map[string]*string{}
 					}
-					route[k][city] = rt
+					ipResults[k][target] = rt
 					mu.Unlock()
-				}(k, city, target)
+				}(k, target)
 			}
 		}
 	}
 	wg.Wait()
 	if probeRoutes {
-		// 缓存线路结果, 预约下次探测(加 0-30 秒抖动, 避免多节点同步探测)。
+		// 每运营商取第一个能分类的 IP 的线路, 都测不出则为未知; 缓存并预约下次探测。
+		for k, targets := range routeTargets {
+			label := pickCarrierLabel(targets, ipResults[k])
+			if route[k] == nil {
+				route[k] = map[string]*string{}
+			}
+			route[k]["hz"] = &label
+		}
 		c.lastRoute = mergeRouteCache(c.lastRoute, route)
 		route = c.lastRoute
 		c.scheduleNextRoute(time.Now())

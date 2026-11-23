@@ -110,12 +110,14 @@ function validateRoute(r) {
       continue;
     }
     if (typeof v !== "object" || Array.isArray(v)) return "route." + k + " 格式错误";
-    for (const city of ["sh", "gz", "bj"]) {
+    // 新版 agent: 单城市 hz(杭州); 旧版: sh/gz/bj, 过渡期两者都接受
+    const cities = v.hz !== undefined ? ["hz"] : ["sh", "gz", "bj"];
+    for (const city of cities) {
       const cv = v[city];
       if (cv === undefined) return "route." + k + " 缺少 " + city;
       if (cv !== null && (typeof cv !== "string" || !ROUTES.has(cv))) return "route." + k + "." + city + " 非法";
     }
-    for (const key of Object.keys(v)) if (!["sh", "gz", "bj"].includes(key)) return "route." + k + " 含未知字段";
+    for (const key of Object.keys(v)) if (!cities.includes(key)) return "route." + k + " 含未知字段";
   }
   for (const key of Object.keys(r)) if (!["ct", "cu", "cm"].includes(key)) return "route 含未知字段";
   return null;
@@ -512,7 +514,7 @@ function routeTag(v){if(!v)return '<span class="route-tag unknown">未知</span>
 function cityTags(r){
   if(typeof r === 'string') return routeTag(r);
   if(!r) return '<span class="route-tag unknown">未知</span>';
-  var cities=[['sh','沪'],['gz','粤'],['bj','京']];
+  var cities=[['sh','沪'],['gz','粤'],['bj','京'],['hz','杭州']];
   var out='';
   cities.forEach(function(c){
     var v=r[c[0]];

@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -144,7 +146,7 @@ func TestRoutesDue(t *testing.T) {
 	if !c.routesDue(now) {
 		t.Fatal("首次应探测")
 	}
-	c.lastRoute = map[string]map[string]*string{"ct": {"sh": strPtr("163")}}
+	c.lastRoute = map[string]map[string]*string{"ct": {"hz": strPtr("163")}}
 	c.scheduleNextRoute(now)
 	if c.routesDue(now) {
 		t.Fatal("刚预约后不应立即再探")
@@ -160,41 +162,71 @@ func TestRoutesDue(t *testing.T) {
 func TestMergeRouteCache(t *testing.T) {
 	// 已有好结果, 新测失败(未知/nil)时保留好结果
 	dst := map[string]map[string]*string{
-		"ct": {"sh": strPtr("163"), "gz": strPtr("163"), "bj": strPtr("CN2")},
+		"ct": {"hz": strPtr("163")},
 	}
 	src := map[string]map[string]*string{
-		"ct": {"sh": strPtr("未知"), "gz": nil, "bj": strPtr("163")},
+		"ct": {"hz": strPtr("未知")},
 	}
 	got := mergeRouteCache(dst, src)
-	if *got["ct"]["sh"] != "163" {
-		t.Fatalf("测出未知应保留原 163, got %v", *got["ct"]["sh"])
+	if *got["ct"]["hz"] != "163" {
+		t.Fatalf("测出未知应保留原 163, got %v", *got["ct"]["hz"])
 	}
-	if *got["ct"]["gz"] != "163" {
-		t.Fatalf("测出 nil 应保留原 163, got %v", *got["ct"]["gz"])
+	got = mergeRouteCache(got, map[string]map[string]*string{
+		"ct": {"hz": nil},
+	})
+	if *got["ct"]["hz"] != "163" {
+		t.Fatalf("测出 nil 应保留原 163, got %v", *got["ct"]["hz"])
 	}
 	// 新测出真实线路时覆盖
 	got = mergeRouteCache(got, map[string]map[string]*string{
-		"ct": {"sh": strPtr("CN2")},
+		"ct": {"hz": strPtr("CN2")},
 	})
-	if *got["ct"]["sh"] != "CN2" {
-		t.Fatalf("测出 CN2 应覆盖, got %v", *got["ct"]["sh"])
+	if *got["ct"]["hz"] != "CN2" {
+		t.Fatalf("测出 CN2 应覆盖, got %v", *got["ct"]["hz"])
 	}
-	// 首次(空缓存)缺失城市补“未知”, 且 9 个城市齐全
+	// 首次(空缓存)缺失城市补“未知”, 且 3 个运营商的杭州齐全
 	got = mergeRouteCache(nil, map[string]map[string]*string{
-		"ct": {"sh": strPtr("163")},
+		"ct": {"hz": strPtr("163")},
 	})
 	for _, k := range []string{"ct", "cu", "cm"} {
-		for _, city := range []string{"sh", "gz", "bj"} {
-			if got[k] == nil || got[k][city] == nil {
-				t.Fatalf("缺少 %s.%s", k, city)
-			}
+		if got[k] == nil || got[k]["hz"] == nil {
+			t.Fatalf("缺少 %s.hz", k)
 		}
 	}
-	if *got["ct"]["sh"] != "163" {
-		t.Fatalf("ct.sh 应为 163, got %v", *got["ct"]["sh"])
+	if *got["ct"]["hz"] != "163" {
+		t.Fatalf("ct.hz 应为 163, got %v", *got["ct"]["hz"])
 	}
-	if *got["cu"]["sh"] != "未知" {
-		t.Fatalf("未测过的城市应补未知, got %v", *got["cu"]["sh"])
+	if *got["cu"]["hz"] != "未知" {
+		t.Fatalf("未测过的运营商应补未知, got %v", *got["cu"]["hz"])
+	}
+}
+
+func TestPickCarrierLabel(t *testing.T) {
+	targets := []string{"115.239.211.112", "122.224.186.100"}
+	// 第一个能分类就用第一个
+	if got := pickCarrierLabel(targets, map[string]*string{
+		"115.239.211.112": strPtr("163"),
+		"122.224.186.100": strPtr("CN2"),
+	}); got != "163" {
+		t.Fatalf("应取第一个 163, got %v", got)
+	}
+	// 第一个测不出, 用第二个
+	if got := pickCarrierLabel(targets, map[string]*string{
+		"115.239.211.112": strPtr("未知"),
+		"122.224.186.100": strPtr("CN2"),
+	}); got != "CN2" {
+		t.Fatalf("第一个未知时应用第二个 CN2, got %v", got)
+	}
+	// 都测不出则未知
+	if got := pickCarrierLabel(targets, map[string]*string{
+		"115.239.211.112": strPtr("未知"),
+		"122.224.186.100": nil,
+	}); got != "未知" {
+		t.Fatalf("都测不出应为未知, got %v", got)
+	}
+	// 无结果也为未知
+	if got := pickCarrierLabel(targets, nil); got != "未知" {
+		t.Fatalf("无结果应为未知, got %v", got)
 	}
 }
 
@@ -202,10 +234,10 @@ func TestHasRouteResult(t *testing.T) {
 	if hasRouteResult(nil) {
 		t.Fatal("空应为无结果")
 	}
-	if hasRouteResult(map[string]map[string]*string{"ct": {"sh": strPtr("未知"), "gz": nil}}) {
+	if hasRouteResult(map[string]map[string]*string{"ct": {"hz": strPtr("未知")}}) {
 		t.Fatal("全未知/nil 应为无结果")
 	}
-	if !hasRouteResult(map[string]map[string]*string{"ct": {"sh": strPtr("未知"), "gz": strPtr("163")}}) {
+	if !hasRouteResult(map[string]map[string]*string{"ct": {"hz": strPtr("未知")}, "cu": {"hz": strPtr("163")}}) {
 		t.Fatal("有一个真实结果即为有结果")
 	}
 }
@@ -214,16 +246,47 @@ func TestScheduleNextRouteInterval(t *testing.T) {
 	now := time.Now()
 	// 有结果: 按 routeInterval(24 小时)
 	c := &collector{routeInterval: 24 * time.Hour}
-	c.lastRoute = map[string]map[string]*string{"ct": {"sh": strPtr("163")}}
+	c.lastRoute = map[string]map[string]*string{"ct": {"hz": strPtr("163")}}
 	c.scheduleNextRoute(now)
 	if d := c.nextRoute.Sub(now); d < 24*time.Hour || d > 24*time.Hour+30*time.Second {
 		t.Fatalf("有结果时下次应在 24h~24h30s 后, got %v", d)
 	}
 	// 无结果: 5 分钟后重试
-	c.lastRoute = map[string]map[string]*string{"ct": {"sh": strPtr("未知"), "gz": strPtr("未知"), "bj": strPtr("未知")}}
+	c.lastRoute = map[string]map[string]*string{"ct": {"hz": strPtr("未知")}}
 	c.scheduleNextRoute(now)
 	if d := c.nextRoute.Sub(now); d < 5*time.Minute || d > 5*time.Minute+30*time.Second {
 		t.Fatalf("无结果时下次应在 5m~5m30s 后, got %v", d)
+	}
+}
+
+func TestPushRefreshRoutes(t *testing.T) {
+	// Worker 返回 refreshRoutes 时 push 应返回 true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"refreshRoutes":true}`))
+	}))
+	defer srv.Close()
+	cfg := config{URL: srv.URL, Token: "test-token"}
+	refresh, err := push(cfg, report{Node: "test"})
+	if err != nil {
+		t.Fatalf("push 应成功, got %v", err)
+	}
+	if !refresh {
+		t.Fatal("应返回 refreshRoutes=true")
+	}
+	// 不带 refreshRoutes 时返回 false
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv2.Close()
+	cfg.URL = srv2.URL
+	refresh, err = push(cfg, report{Node: "test"})
+	if err != nil {
+		t.Fatalf("push 应成功, got %v", err)
+	}
+	if refresh {
+		t.Fatal("不带 refreshRoutes 时应返回 false")
 	}
 }
 

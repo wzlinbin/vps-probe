@@ -10,7 +10,7 @@ const PUSH_MIN_INTERVAL = 10; // 秒/节点
 const ONLINE_THRESHOLD = 120; // 秒内有上报算在线
 const MAX_BODY = 65536;
 const NODE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const ROUTES = new Set(["163", "CN2", "9929", "CMIN2", "4837", "9808", "未知"]);
+const ROUTES = new Set(["163", "CN2", "CTGNet", "9929", "CMIN2", "4837", "CUG", "CMI", "9808", "CERNET", "CBN", "阿里云", "腾讯云", "华为云", "未知"]);
 
 function secHeaders() {
   return {
@@ -137,7 +137,7 @@ function validateReport(d) {
     if (d.return_routes === null || typeof d.return_routes !== "object" || Array.isArray(d.return_routes)) return "return_routes 格式错误";
     for (const [k, v] of Object.entries(d.return_routes)) {
       if (!NODE_RE.test(k)) return "return_routes 目标非法";
-      if (!["163", "9929", "CMIN2", "4837"].includes(v)) return "return_routes 线路非法";
+      if (!["163", "CN2", "CTGNet", "9929", "CMIN2", "4837", "CUG", "CMI", "9808", "CERNET", "CBN", "阿里云", "腾讯云", "华为云"].includes(v)) return "return_routes 线路非法";
     }
   }
   if (d.name !== undefined) {
@@ -315,12 +315,13 @@ async function handleStatus(env) {
     let meta = null;
     const metaRaw = await env.PROBE_KV.get("node:" + id + ":meta");
     if (metaRaw) { try { meta = JSON.parse(metaRaw); } catch { meta = null; } }
-    // 去程: 取国内探测节点上报的各运营商线路, 只取 10 分钟内的
+    // 去程: 取 boce.aliyun.com 探针上报的各运营商线路, 接受 8 天内的值
+    // (测出正常线路后 7 天才重测, 没测出则 5 分钟后重试; 值必须在 KV 里留够 7 天)
     const retRaw = await Promise.all(["ct", "cu", "cm"].map((c) => env.PROBE_KV.get("return:" + id + ":" + c)));
     const ret = {};
     ["ct", "cu", "cm"].forEach((c, i) => {
       let v = null;
-      if (retRaw[i]) { try { const p = JSON.parse(retRaw[i]); if (p && p.route && now - p.ts < 600) v = p.route; } catch { /* 忽略损坏记录 */ } }
+      if (retRaw[i]) { try { const p = JSON.parse(retRaw[i]); if (p && p.route && now - p.ts < 691200) v = p.route; } catch { /* 忽略损坏记录 */ } }
       ret[c] = v;
     });
     nodes.push({
@@ -597,7 +598,7 @@ function render(nodes,now){
    +'<tr><td>电信</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td><td>'+cityTags(d.route.ct)+'</td></tr>'
    +'<tr><td>联通</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td><td>'+cityTags(d.route.cu)+'</td></tr>'
    +'<tr><td>移动</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td><td>'+cityTags(d.route.cm)+'</td></tr></table>'
-   +'<div class="note">去程线路由国内探测节点上报, 未上报时显示 —。回程线路为本节点向杭州目标探测的结果。数据 '+timeAgo(n.lastSeen)+'更新。</div>'
+   +'<div class="note">去程线路由 boce.aliyun.com 探针(杭州优先)探测, 测出线路后 7 天再测, 未测出 5 分钟后重试, 未探测时显示 —。回程线路为本节点向杭州目标探测的结果。数据 '+timeAgo(n.lastSeen)+'更新。</div>'
    +'<div class="routes-actions"><button class="refresh-routes" data-node="'+esc(n.id)+'">立即检测</button><span class="refresh-status" id="rs-'+esc(n.id)+'"></span></div>';
   h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button class="save" data-node="'+esc(n.id)+'">保存设置</button><button class="del" data-node="'+esc(n.id)+'">删除节点</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
   h+='</div>';

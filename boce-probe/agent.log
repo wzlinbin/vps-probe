@@ -1,0 +1,157 @@
+Traceback (most recent call last):
+  File "/home/hatch/workspace/vps-probe/boce-probe/probe.py", line 53, in <module>
+    from boce_tool import (PRODUCT_QUERY, _call_api, _create_task,  # noqa: E402
+ModuleNotFoundError: No module named 'boce_tool'
+[INFO] 获取 traceroute 探针节点...
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/urllib3/connectionpool.py", line 468, in _make_request
+    self._validate_conn(conn)
+  File "/usr/lib/python3/dist-packages/urllib3/connectionpool.py", line 1109, in _validate_conn
+    conn.connect()
+  File "/usr/lib/python3/dist-packages/urllib3/connection.py", line 642, in connect
+    sock_and_verified = _ssl_wrap_socket_and_match_hostname(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/connection.py", line 783, in _ssl_wrap_socket_and_match_hostname
+    ssl_sock = ssl_wrap_socket(
+               ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/util/ssl_.py", line 471, in ssl_wrap_socket
+    ssl_sock = _ssl_wrap_socket_impl(sock, context, tls_in_tls, server_hostname)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/util/ssl_.py", line 515, in _ssl_wrap_socket_impl
+    return ssl_context.wrap_socket(sock, server_hostname=server_hostname)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 455, in wrap_socket
+    return self.sslsocket_class._create(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1042, in _create
+    self.do_handshake()
+  File "/usr/lib/python3.12/ssl.py", line 1320, in do_handshake
+    self._sslobj.do_handshake()
+ssl.SSLError: [SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/urllib3/connectionpool.py", line 791, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/connectionpool.py", line 492, in _make_request
+    raise new_e
+urllib3.exceptions.SSLError: [SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/requests/adapters.py", line 486, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/connectionpool.py", line 875, in urlopen
+    return self.urlopen(
+           ^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/connectionpool.py", line 875, in urlopen
+    return self.urlopen(
+           ^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/connectionpool.py", line 845, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/urllib3/util/retry.py", line 517, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='boce.aliyun.com', port=443): Max retries exceeded with url: /data/api.json?action=DescribeSiteMonitorISPCityList (Caused by SSLError(SSLError(1, '[SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/hatch/.codex/skills/alibabacloud-website-probe/scripts/boce_tool.py", line 391, in _call_api
+    resp = session.post(url, data=form_data, timeout=REQUEST_TIMEOUT)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/requests/sessions.py", line 637, in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/requests/adapters.py", line 517, in send
+    raise SSLError(e, request=request)
+requests.exceptions.SSLError: HTTPSConnectionPool(host='boce.aliyun.com', port=443): Max retries exceeded with url: /data/api.json?action=DescribeSiteMonitorISPCityList (Caused by SSLError(SSLError(1, '[SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/hatch/workspace/vps-probe/boce-probe/probe.py", line 479, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/hatch/workspace/vps-probe/boce-probe/probe.py", line 429, in main
+    all_nodes = get_probe_nodes(session, task_type="9")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hatch/.codex/skills/alibabacloud-website-probe/scripts/boce_tool.py", line 445, in get_probe_nodes
+    result = _call_api(session, "DescribeSiteMonitorISPCityList", params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hatch/.codex/skills/alibabacloud-website-probe/scripts/boce_tool.py", line 418, in _call_api
+    raise RuntimeError(f"Network error [{action}]: {e}")
+RuntimeError: Network error [DescribeSiteMonitorISPCityList]: HTTPSConnectionPool(host='boce.aliyun.com', port=443): Max retries exceeded with url: /data/api.json?action=DescribeSiteMonitorISPCityList (Caused by SSLError(SSLError(1, '[SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1000)')))
+[INFO] 获取 traceroute 探针节点...
+[INFO] 探针节点总数: 259
+[INFO] 电信: 首选 杭州市(浙江省) 备选 台州市(浙江省)
+[INFO] 联通: 首选 杭州市(浙江省) 备选 上海市(上海市)
+[INFO] 移动: 首选 杭州市(浙江省) 备选 宁波市(浙江省)
+[ERROR] KV list 失败: Traceback (most recent call last):
+  File "/home/hatch/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py", line 19, in <module>
+    sys.exit(subprocess.run(["npx", "wrangler", *sys.ar
+[INFO] 待测 VPS: []
+[INFO] 常驻 agent 模式启动: 测完按结果睡觉, 到时间自己再测
+[INFO] 本轮无到期的(VPS, 运营商), 不发探测
+[INFO] 睡 60 分 0 秒后醒来再测
+[INFO] 获取 traceroute 探针节点...
+[INFO] 探针节点总数: 259
+[INFO] 电信: 首选 杭州市(浙江省) 备选 台州市(浙江省)
+[INFO] 联通: 首选 杭州市(浙江省) 备选 上海市(上海市)
+[INFO] 移动: 首选 杭州市(浙江省) 备选 宁波市(浙江省)
+[ERROR] KV list 失败: Traceback (most recent call last):
+  File "/home/hatch/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py", line 19, in <module>
+    sys.exit(subprocess.run(["npx", "wrangler", *sys.ar
+[INFO] 待测 VPS: []
+[INFO] 常驻 agent 模式启动: 测完按结果睡觉, 到时间自己再测
+[INFO] 本轮无到期的(VPS, 运营商), 不发探测
+[INFO] 睡 60 分 0 秒后醒来再测
+[INFO] 获取 traceroute 探针节点...
+[INFO] 探针节点总数: 259
+[INFO] 电信: 首选 杭州市(浙江省) 备选 台州市(浙江省)
+[INFO] 联通: 首选 杭州市(浙江省) 备选 上海市(上海市)
+[INFO] 移动: 首选 杭州市(浙江省) 备选 宁波市(浙江省)
+[ERROR] KV list 失败: [33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mProxy environment variables detected. We'll use your proxy for fetch requests.[0m
+
+
+[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mWrangler detected
+[INFO] 待测 VPS: []
+[INFO] 常驻 agent 模式启动: 测完按结果睡觉, 到时间自己再测
+[INFO] 本轮无到期的(VPS, 运营商), 不发探测
+[INFO] 睡 60 分 0 秒后醒来再测
+[INFO] 获取 traceroute 探针节点...
+[INFO] 探针节点总数: 259
+[INFO] 电信: 首选 杭州市(浙江省) 备选 台州市(浙江省)
+[INFO] 联通: 首选 杭州市(浙江省) 备选 上海市(上海市)
+[INFO] 移动: 首选 杭州市(浙江省) 备选 宁波市(浙江省)
+[INFO] 待测 VPS: [('instance-20260130-1224-arm2', '150.230.194.143'), ('la', '168.107.87.45'), ('vps-1469', '185.220.197.10')]
+[INFO] 常驻 agent 模式启动: 测完按结果睡觉, 到时间自己再测
+[INFO] 本轮待测: [('instance-20260130-1224-arm2', ['电信', '联通', '移动']), ('la', ['移动']), ('vps-1469', ['电信', '联通', '移动'])]
+[INFO] 探测 instance-20260130-1224-arm2 (150.230.194.143) 到期运营商: ['电信', '联通', '移动']...
+[WARN] 150.230.194.143 联通(杭州市) 路由全空, 探针未返回数据
+[WARN] 150.230.194.143 移动(杭州市) 路由全空, 探针未返回数据
+[INFO] 150.230.194.143: 2 个运营商首选全空, 用备选节点再测...
+[WARN] 轮询失败: API error [DescribeSiteMonitorLog]: Server unreachable: connection http://metrics.aliyuncs.com/?Action=DescribeSiteMonitorLog&TaskIds=67f6623e-3b86-4616-a803-6579a31bf2e8&EndTime=1795415446627&StartTime=1795408246627&Timestamp=2026-11-23T06%3A30%3A47Z&SignatureVersion=1.0&Format=JSON&SignatureNonce=b05cd056-7d18-4931-9119-1f3109cfc5f4179541544789323482&Version=2019-01-01&AccessKeyId=LTAI5tNBFrPYtaHVEWt1qe5z&Signature=0fNLO298o%2F9X9CoF70UiT22JJx8%3D&SignatureMethod=HMAC-SHA1&RegionId=cn-hangzhou&UseFormatter=true failed
+[WARN] 150.230.194.143 移动(宁波市) 路由全空, 探针未返回数据
+[INFO] instance-20260130-1224-arm2 电信: 杭州市 163 -> return:instance-20260130-1224-arm2:ct OK(7 天后再测)
+[INFO] instance-20260130-1224-arm2 联通: 上海市 9929 -> return:instance-20260130-1224-arm2:cu OK(7 天后再测)
+[WARN] instance-20260130-1224-arm2 移动: 无结果, 不写 KV, 5 分钟后再试
+[INFO] 间隔 30s 后测下一个 VPS(控频)...
+[INFO] 探测 la (168.107.87.45) 到期运营商: ['移动']...
+[WARN] 168.107.87.45 移动(杭州市) 路由全空, 探针未返回数据
+[INFO] 168.107.87.45: 1 个运营商首选全空, 用备选节点再测...
+[WARN] 168.107.87.45 移动(宁波市) 路由全空, 探针未返回数据
+[WARN] la: 未拿到任何运营商结果, 不写 KV, 5 分钟后再试
+[INFO] 间隔 30s 后测下一个 VPS(控频)...
+[INFO] 探测 vps-1469 (185.220.197.10) 到期运营商: ['电信', '联通', '移动']...

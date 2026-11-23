@@ -355,13 +355,20 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 .nodehead h2{font-size:19px;margin:0}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:1px}
 .dot.on{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.2)}.dot.off{background:#cbd5e1}
 .nodehead .meta{color:#8a90a0;font-size:13px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;margin-top:18px}
+.gauges{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 20px;margin-top:18px}
 .tile{text-align:center}.tile .lab{font-size:13px;color:#5b6474;display:flex;align-items:center;justify-content:center;gap:6px}
 .tile .big{font-size:22px;font-weight:650;margin-top:4px}
 .tile .small{font-size:12px;color:#8a90a0;margin-top:2px}
 .gauge{width:150px;max-width:100%;display:block;margin:0 auto}
-.rates{display:flex;gap:24px;margin-top:16px;padding-top:14px;border-top:1px solid #eef0f4;font-size:14px}
-.rates b{font-weight:650}
+.traffic{margin-top:16px;padding:14px 16px;background:#f8f9fb;border:1px solid #eef0f4;border-radius:12px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.traffic .lab{font-size:13px;color:#5b6474}
+.traffic .t-left{flex:1;min-width:220px}
+.traffic .t-big{font-size:24px;font-weight:650;margin-top:2px}
+.traffic .small{font-size:12px;color:#8a90a0;margin-top:2px}
+.traffic .t-right{text-align:right;flex-shrink:0}
+.traffic .t-rate{font-size:14px}
+.qbar{height:8px;background:#e5e8ee;border-radius:99px;overflow:hidden;margin-top:10px}
+.qbar i{display:block;height:100%;border-radius:99px}
 .ping{margin-top:16px;padding-top:14px;border-top:1px solid #eef0f4}
 .prow{display:grid;grid-template-columns:52px 70px 1fr 52px;align-items:center;gap:10px;padding:7px 0;font-size:14px}
 .bar{height:8px;background:#eef0f4;border-radius:99px;overflow:hidden}.bar i{display:block;height:100%;border-radius:99px}
@@ -377,7 +384,7 @@ th{color:#8a90a0;font-weight:500;font-size:12px}
 .metaform button{padding:8px 14px;border:0;border-radius:8px;background:#1f2430;color:#fff;font-size:13px;cursor:pointer}
 .metaform .saved{color:#16a34a;font-size:13px}
 .empty{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(30,40,70,.08);padding:40px 24px;text-align:center;color:#8a90a0}
-@media(max-width:560px){.grid{grid-template-columns:1fr 1fr}.prow{grid-template-columns:44px 62px 1fr 46px}}
+@media(max-width:560px){.gauges{gap:8px}.prow{grid-template-columns:44px 62px 1fr 46px}}
 </style></head><body><div class="wrap">
 <div class="top"><div><h1>探针</h1><div class="sub" id="updated"></div></div><button class="logout" id="logout">退出</button></div>
 <div id="list"></div>
@@ -422,20 +429,19 @@ function render(nodes,now){
   var d=n.data,m=n.meta||{};
   var memPct=pct(d.mem_used,d.mem_total),diskPct=pct(d.disk_used,d.disk_total);
   var traffic=d.net_rx+d.net_tx;
-  var quotaLine=m.quotaGB?(' / '+m.quotaGB+' GB'):'';
   var quotaPct=m.quotaGB?pct(traffic,m.quotaGB*1073741824):null;
   var remain='';
   if(m.expiresAt){var days=Math.ceil((new Date(m.expiresAt+'T00:00:00Z').getTime()-Date.now())/86400000);remain='剩余 '+days+' 天';}
   var displayName=(m.name&&m.name.length?m.name:(d.name&&d.name.length?d.name:n.id));
   var idSuffix=(displayName!==n.id)?' · '+esc(n.id):'';
   h+='<div class="card"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 在线 '+daysSince(n.firstSeen)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
-  h+='<div class="grid">'
+  h+='<div class="gauges">'
    +'<div class="tile"><div class="lab">CPU</div>'+gauge(d.cpu)+'<div class="small">'+d.load.map(function(x){return x.toFixed(2)}).join(', ')+'</div></div>'
    +'<div class="tile"><div class="lab">内存</div>'+gauge(memPct)+'<div class="small">'+fmtBytes(d.mem_used)+' / '+fmtBytes(d.mem_total)+'</div></div>'
    +'<div class="tile"><div class="lab">硬盘</div>'+gauge(diskPct)+'<div class="small">'+fmtBytes(d.disk_used)+' / '+fmtBytes(d.disk_total)+'</div></div>'
-   +'<div class="tile"><div class="lab">流量</div><div class="big">'+(quotaPct==null?fmtBytes(traffic):quotaPct+'%')+'</div><div class="small">'+fmtBytes(traffic)+quotaLine+'</div></div>'
    +'</div>';
-  h+='<div class="rates"><span>↑ '+fmtRate(d.net_tx_rate)+'</span><span>↓ '+fmtRate(d.net_rx_rate)+'</span><span style="color:#8a90a0;font-size:13px">累计 ↑ '+fmtBytes(d.net_tx)+' ↓ '+fmtBytes(d.net_rx)+'</span></div>';
+  h+='<div class="traffic"><div class="t-left"><div class="lab">流量</div><div class="t-big">'+fmtBytes(traffic)+'</div><div class="small">'+(m.quotaGB?('配额 '+m.quotaGB+' GB · 已用 '+quotaPct+'%'):'累计')+'</div>'+(quotaPct==null?'':'<div class="qbar"><i style="width:'+Math.min(quotaPct,100)+'%;background:'+gaugeColor(quotaPct)+'"></i></div>')+'</div>'
+   +'<div class="t-right"><div class="t-rate">↑ '+fmtRate(d.net_tx_rate)+'　↓ '+fmtRate(d.net_rx_rate)+'</div><div class="small">累计 ↑ '+fmtBytes(d.net_tx)+'　↓ '+fmtBytes(d.net_rx)+'</div></div></div>';
   h+='<div class="ping">'+pingRow('电信',d.ping.ct)+pingRow('联通',d.ping.cu)+pingRow('移动',d.ping.cm)+'</div>';
   h+='<table><tr><th>三网线路</th><th>去程</th><th>回程</th></tr>'
    +'<tr><td>电信</td><td>'+routeTag(d.route.ct)+'</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td></tr>'

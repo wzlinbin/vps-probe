@@ -71,13 +71,14 @@ VPS_GAP_SECONDS = 30  # 各 VPS 间隔, 避免集中请求
 CARRIERS = ["ct", "cu", "cm"]
 CARRIER_ZH = {"ct": "电信", "cu": "联通", "cm": "移动"}
 ISP_ZH = {"电信": "ct", "联通": "cu", "移动": "cm"}
-VALID_LINES = {"163", "CN2", "CTGNet", "9929", "4837", "CUG", "CMIN2", "CMI", "9808",
+VALID_LINES = {"163", "CN2", "CN2 GT", "CTGNet", "9929", "4837", "CUG", "CMIN2", "CMI", "9808",
                "CERNET", "CBN", "阿里云", "腾讯云", "华为云"}  # 正常线路; "未知"不算正常结果, 5 分钟后重试
 
 # 判线网段表(与 agent/main.go routePrefixes 一致, 按前缀匹配; 223.120 由 classify_ip 按第三段区分)
 ROUTE_PREFIXES = [
     ("202.97.", "163"), ("59.43.", "CN2"),
     ("218.30.62.", "CTGNet"), ("203.22.180.", "CTGNet"),
+    ("218.30.", "163"),  # 218.30 除 CTGNet 窄段(62.0/23)外均为 AS4134(163); 如 218.30.48.73(洛杉矶出口)
     ("202.55.8.", "CTGNet"), ("203.196.8.", "CTGNet"), ("210.48.136.", "CTGNet"), ("210.48.140.", "CTGNet"),
     ("203.12.200.", "CTGNet"), ("203.19.32.", "CTGNet"), ("203.14.188.", "CTGNet"),
     ("220.174.26.", "CTGNet"), ("220.174.94.", "CTGNet"),
@@ -131,20 +132,31 @@ def classify_route(route_json_str, ip_geo_map_str=None):
     """给一次 traceroute 结果判线.
 
     route 是 JSON 字符串, 元素为 {"rtt": n, "ip": "x.x.x.x"}.
-    取路由上第一个命中网段表的跳点作为线路(流量进入该骨干即定线).
+    扫完全部跳点再判线. 电信特殊处理: 163 与 CN2 都出现时看先后——
+    163 在先、CN2 在后是 CN2 GT(半程), CN2 在先是 CN2 GIA(全程).
+    其他运营商取跳点顺序中最先出现的线路.
     若无跳点命中, 返回 '未知'.
     """
     try:
         hops = json.loads(route_json_str) if isinstance(route_json_str, str) else (route_json_str or [])
     except (json.JSONDecodeError, TypeError):
         return "未知"
+    first_idx = {}
+    idx = 0
     for hop in hops:
+        idx += 1
         if not isinstance(hop, dict):
             continue
         label = classify_ip(hop.get("ip", ""))
-        if label:
-            return label
-    return "未知"
+        if not label:
+            continue
+        if label not in first_idx:
+            first_idx[label] = idx
+    if not first_idx:
+        return "未知"
+    if "163" in first_idx and "CN2" in first_idx:
+        return "CN2 GT" if first_idx["163"] < first_idx["CN2"] else "CN2"
+    return min(first_idx, key=first_idx.get)
 
 
 def pick_probe_nodes(all_nodes):

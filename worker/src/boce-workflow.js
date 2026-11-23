@@ -16,13 +16,14 @@ const VPS_GAP_SECONDS = 30; // 各 VPS 间隔
 const CARRIERS = ['ct', 'cu', 'cm'];
 const CARRIER_ZH = { ct: '电信', cu: '联通', cm: '移动' };
 const ISP_ZH = { '电信': 'ct', '联通': 'cu', '移动': 'cm' };
-const VALID_LINES = new Set(['163', 'CN2', 'CTGNet', '9929', '4837', 'CUG', 'CMIN2', 'CMI', '9808',
+const VALID_LINES = new Set(['163', 'CN2', 'CN2 GT', 'CTGNet', '9929', '4837', 'CUG', 'CMIN2', 'CMI', '9808',
   'CERNET', 'CBN', '阿里云', '腾讯云', '华为云']);
 
 // 判线网段表(与 agent/main.go routePrefixes 一致; 223.120 由 classifyIP 按第三段区分)
 const ROUTE_PREFIXES = [
   ['202.97.', '163'], ['59.43.', 'CN2'],
   ['218.30.62.', 'CTGNet'], ['203.22.180.', 'CTGNet'],
+  ['218.30.', '163'], // 218.30 除 CTGNet 窄段(62.0/23)外均为 AS4134(163); 如 218.30.48.73(洛杉矶出口)
   ['202.55.8.', 'CTGNet'], ['203.196.8.', 'CTGNet'], ['210.48.136.', 'CTGNet'], ['210.48.140.', 'CTGNet'],
   ['203.12.200.', 'CTGNet'], ['203.19.32.', 'CTGNet'], ['203.14.188.', 'CTGNet'],
   ['220.174.26.', 'CTGNet'], ['220.174.94.', 'CTGNet'],
@@ -69,17 +70,31 @@ function classifyIP(ip) {
 
 function classifyRoute(route) {
   // route: 元素为 {"rtt": n, "ip": "x.x.x.x"} 的数组(或 JSON 字符串)
+  // 扫完全部跳点再判线. 电信特殊处理: 163 与 CN2 都出现时看先后——
+  // 163 在先、CN2 在后是 CN2 GT(半程), CN2 在先是 CN2 GIA(全程).
+  // 其他运营商取跳点顺序中最先出现的线路.
   let hops = route;
   if (typeof hops === 'string') {
     try { hops = JSON.parse(hops); } catch { return '未知'; }
   }
   if (!Array.isArray(hops)) return '未知';
+  const firstIdx = {};
+  let idx = 0;
   for (const hop of hops) {
+    idx++;
     if (!hop || typeof hop !== 'object') continue;
     const label = classifyIP(hop.ip || '');
-    if (label) return label;
+    if (!label) continue;
+    if (!(label in firstIdx)) firstIdx[label] = idx;
   }
-  return '未知';
+  const keys = Object.keys(firstIdx);
+  if (keys.length === 0) return '未知';
+  if ('163' in firstIdx && 'CN2' in firstIdx) {
+    return firstIdx['163'] < firstIdx['CN2'] ? 'CN2 GT' : 'CN2';
+  }
+  let best = keys[0];
+  for (const k of keys) if (firstIdx[k] < firstIdx[best]) best = k;
+  return best;
 }
 
 function routeIsEmpty(route) {

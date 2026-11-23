@@ -537,6 +537,7 @@ var routePrefixes = []struct {
 }{
 	{"202.97.", "163"}, {"59.43.", "CN2"},
 	{"218.30.62.", "CTGNet"}, {"203.22.180.", "CTGNet"},
+	{"218.30.", "163"}, // 218.30 除 CTGNet 窄段(62.0/23)外均为 AS4134(163); 如 218.30.48.73(洛杉矶出口)
 	{"202.55.8.", "CTGNet"}, {"203.196.8.", "CTGNet"}, {"210.48.136.", "CTGNet"}, {"210.48.140.", "CTGNet"},
 	{"203.12.200.", "CTGNet"}, {"203.19.32.", "CTGNet"}, {"203.14.188.", "CTGNet"},
 	{"220.174.26.", "CTGNet"}, {"220.174.94.", "CTGNet"},
@@ -615,23 +616,51 @@ func tracerouteOne(target string) *string {
 	return &unknown
 }
 
+// classifyRoute 扫完全部跳点再判线(回落路径, nexttrace 不可用时用).
+// 电信特殊处理: 163 与 CN2 都出现时看先后——163 在先、CN2 在后是 CN2 GT(半程),
+// CN2 在先是 CN2 GIA(全程). 其他运营商取跳点顺序中最先出现的线路.
 func classifyRoute(out string) string {
 	seen := map[string]bool{}
+	firstIdx := map[string]int{}
+	idx := 0
 	for _, m := range hopRe.FindAllStringSubmatch(out, -1) {
 		ip := m[1]
 		if seen[ip] {
 			continue
 		}
 		seen[ip] = true
+		idx++
 		if net.ParseIP(ip).IsPrivate() || strings.HasPrefix(ip, "10.") ||
 			strings.HasPrefix(ip, "172.16.") || strings.HasPrefix(ip, "192.168.") {
 			continue // 跳过内网跳点
 		}
-		if label := classifyIP(ip); label != "" {
-			return label
+		label := classifyIP(ip)
+		if label == "" {
+			continue
+		}
+		if _, ok := firstIdx[label]; !ok {
+			firstIdx[label] = idx
 		}
 	}
-	return ""
+	if len(firstIdx) == 0 {
+		return ""
+	}
+	if i163, ok163 := firstIdx["163"]; ok163 {
+		if iCN2, okCN2 := firstIdx["CN2"]; okCN2 {
+			if i163 < iCN2 {
+				return "CN2 GT"
+			}
+			return "CN2"
+		}
+	}
+	best := ""
+	bestIdx := 0
+	for label, i := range firstIdx {
+		if best == "" || i < bestIdx {
+			best, bestIdx = label, i
+		}
+	}
+	return best
 }
 
 // 线路判断: 优先用 nexttrace 逐跳 ASN(比写死网段更根本, ASN 不会过时)。
@@ -681,30 +710,60 @@ func ntHopIP(raw json.RawMessage) string {
 	return ip
 }
 
-// classifyNtHops 按 TTL 顺序取第一个能判出线路的跳点:
-// 有 ASN 就按 ASN 判, 无 ASN 用跳点 IP 走网段表, 都判不出返回"未知"。
+// classifyNtHops 扫完全部跳点再判线(不能只取第一个能判出的跳点).
+// 电信特殊处理: 163 与 CN2 都出现时看先后——163 在先、CN2 在后是 CN2 GT(半程),
+// CN2 在先是 CN2 GIA(全程). 如 218.30.48.73(AS4134, 洛杉矶出口) -> 59.43.x.x(上海 CN2)
+// 就是 CN2 GT, 不能只看第 3 跳就判成 163. 其他运营商取跳点顺序中最先出现的线路.
 func classifyNtHops(hops [][]ntHop) string {
+	firstIdx := map[string]int{}
+	idx := 0
 	for _, ttlHops := range hops {
 		for _, h := range ttlHops {
+			idx++
 			if !h.Success {
 				continue
 			}
+			var label string
 			if h.Geo != nil && h.Geo.Asnumber != "" {
 				num := strings.TrimPrefix(strings.TrimPrefix(h.Geo.Asnumber, "AS"), "as")
 				if n, err := strconv.Atoi(num); err == nil {
-					if label, ok := asnLabels[n]; ok {
-						return label
-					}
+					label, _ = asnLabels[n]
 				}
 			}
-			if ip := ntHopIP(h.Address); ip != "" {
-				if label := classifyIP(ip); label != "" {
-					return label
+			if label == "" {
+				if ip := ntHopIP(h.Address); ip != "" {
+					label = classifyIP(ip)
 				}
+			}
+			if label == "" {
+				continue
+			}
+			if _, ok := firstIdx[label]; !ok {
+				firstIdx[label] = idx
 			}
 		}
 	}
-	return "未知"
+	if len(firstIdx) == 0 {
+		return "未知"
+	}
+	// 电信: 163 与 CN2 都出现时按先后分 GT/GIA
+	if i163, ok163 := firstIdx["163"]; ok163 {
+		if iCN2, okCN2 := firstIdx["CN2"]; okCN2 {
+			if i163 < iCN2 {
+				return "CN2 GT"
+			}
+			return "CN2"
+		}
+	}
+	// 其他: 取跳点顺序中最先出现的线路
+	best := ""
+	bestIdx := 0
+	for label, i := range firstIdx {
+		if best == "" || i < bestIdx {
+			best, bestIdx = label, i
+		}
+	}
+	return best
 }
 
 // 用 nexttrace 测到目标的线路(-M 关掉 maptrace, 否则其 API 失败会吞掉 JSON 输出)。

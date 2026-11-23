@@ -12,7 +12,7 @@ const PUSH_MIN_INTERVAL = 10; // 秒/节点
 const ONLINE_THRESHOLD = 120; // 秒内有上报算在线
 const MAX_BODY = 65536;
 const NODE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const ROUTES = new Set(["163", "CN2", "CTGNet", "9929", "CMIN2", "4837", "CUG", "CMI", "9808", "CERNET", "CBN", "阿里云", "腾讯云", "华为云", "未知"]);
+const ROUTES = new Set(["163", "CN2", "CN2 GT", "CTGNet", "9929", "CMIN2", "4837", "CUG", "CMI", "9808", "CERNET", "CBN", "阿里云", "腾讯云", "华为云", "未知"]);
 
 function secHeaders() {
   return {
@@ -139,7 +139,7 @@ function validateReport(d) {
     if (d.return_routes === null || typeof d.return_routes !== "object" || Array.isArray(d.return_routes)) return "return_routes 格式错误";
     for (const [k, v] of Object.entries(d.return_routes)) {
       if (!NODE_RE.test(k)) return "return_routes 目标非法";
-      if (!["163", "CN2", "CTGNet", "9929", "CMIN2", "4837", "CUG", "CMI", "9808", "CERNET", "CBN", "阿里云", "腾讯云", "华为云"].includes(v)) return "return_routes 线路非法";
+      if (!["163", "CN2", "CN2 GT", "CTGNet", "9929", "CMIN2", "4837", "CUG", "CMI", "9808", "CERNET", "CBN", "阿里云", "腾讯云", "华为云"].includes(v)) return "return_routes 线路非法";
     }
   }
   if (d.name !== undefined) {
@@ -547,7 +547,7 @@ function pingRow(name,r){var ms=r&&r.avg!=null?Math.round(r.avg):null;var loss=r
 function routeTag(v){if(!v)return '<span class="route-tag unknown">未知</span>';if(v==='未知')return '<span class="route-tag unknown">未知</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
 // 线路标签 -> ASN + 线路名(面板只显示这个, 不显示城市)
 var LINE_DISPLAY={
- '163':'AS4134 普通 163 骨干网','CN2':'AS4809 CN2 GIA','4837':'AS4837 联通 169 骨干网','9929':'AS9929 联通 A 网',
+ '163':'AS4134 普通 163 骨干网','CN2':'AS4809 CN2 GIA','CN2 GT':'AS4134/4809 CN2 GT','4837':'AS4837 联通 169 骨干网','9929':'AS9929 联通 A 网',
  'CTGNet':'AS23764 CTGNet','CUG':'AS10099 联通国际 CUG','CMI':'AS58453 CMI','CMIN2':'AS58807 CMIN2',
  '9808':'AS9808 移动普通骨干网','CERNET':'AS4538 教育网 CERNET','CBN':'AS7641 广电网络 CBN',
  '阿里云':'AS37963/45102 阿里云','腾讯云':'AS45090/132203 腾讯云','华为云':'AS55990 华为云','未知':'未知'

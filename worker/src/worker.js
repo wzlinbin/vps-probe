@@ -407,7 +407,7 @@ function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{'&':'&amp
 function fmtBytes(b){if(b>=1073741824)return (b/1073741824).toFixed(1)+' GB';if(b>=1048576)return (b/1048576).toFixed(1)+' MB';if(b>=1024)return (b/1024).toFixed(1)+' KB';return b+' B'}
 function fmtRate(b){if(b>=1048576)return (b/1048576).toFixed(2)+' MB/s';if(b>=1024)return (b/1024).toFixed(1)+' KB/s';return b+' B/s'}
 function pct(a,b){if(!b)return 0;return Math.min(100,Math.round(a/b*1000)/10)}
-function daysSince(ts){var d=Math.floor((Date.now()/1000-ts)/86400);return d<1?'不到 1 天':d+' 天'}
+function fmtUptime(sec){if(!sec||sec<=0)return '未知';var d=Math.floor(sec/86400);if(d>=1)return d+' 天';var h=Math.floor(sec/3600);if(h>=1)return h+' 小时';return Math.floor(sec/60)+' 分钟'}
 function timeAgo(ts){var s=Math.floor(Date.now()/1000-ts);if(s<60)return s+' 秒前';if(s<3600)return Math.floor(s/60)+' 分钟前';return Math.floor(s/3600)+' 小时前'}
 function barColor(ms){if(ms==null)return '#cbd5e1';if(ms<120)return '#22c55e';if(ms<250)return '#eab308';return '#ef4444'}
 function pingRow(name,r){var ms=r&&r.avg!=null?Math.round(r.avg):null;var loss=r&&r.loss!=null?r.loss:null;
@@ -459,7 +459,7 @@ function render(nodes,now){
   if(m.expiresAt){var days=Math.ceil((new Date(m.expiresAt+'T00:00:00Z').getTime()-Date.now())/86400000);remain='剩余 '+days+' 天';}
   var displayName=(m.name&&m.name.length?m.name:(d.name&&d.name.length?d.name:n.id));
   var idSuffix=(displayName!==n.id)?' · '+esc(n.id):'';
-  h+='<div class="card"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 在线 '+daysSince(n.firstSeen)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
+  h+='<div class="card"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 运行 '+fmtUptime(d.uptime)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
   h+='<div class="gauges">'
    +'<div class="tile"><div class="lab">CPU</div>'+gauge(d.cpu)+'<div class="small">'+d.load.map(function(x){return x.toFixed(2)}).join(', ')+'</div></div>'
    +'<div class="tile"><div class="lab">内存</div>'+gauge(memPct)+'<div class="small">'+fmtBytes(d.mem_used)+' / '+fmtBytes(d.mem_total)+'</div></div>'

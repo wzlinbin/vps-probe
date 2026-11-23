@@ -111,10 +111,21 @@ function validateRoute(r) {
 
 function validateReport(d) {
   if (d === null || typeof d !== "object" || Array.isArray(d)) return "body 必须是 JSON 对象";
-  const allowed = new Set(["node", "name", "ts", "hostname", "uptime", "cpu", "load", "mem_total", "mem_used",
+  const allowed = new Set(["node", "name", "carrier", "return_routes", "ts", "hostname", "uptime", "cpu", "load", "mem_total", "mem_used",
     "disk_total", "disk_used", "net_rx", "net_tx", "net_rx_rate", "net_tx_rate", "ping", "route"]);
   for (const k of Object.keys(d)) if (!allowed.has(k)) return "未知字段: " + k;
   if (typeof d.node !== "string" || !NODE_RE.test(d.node)) return "node 非法";
+  if (d.carrier !== undefined) {
+    if (!["ct", "cu", "cm"].includes(d.carrier)) return "carrier 非法";
+  }
+  if (d.return_routes !== undefined) {
+    if (d.carrier === undefined) return "回程上报需 carrier";
+    if (d.return_routes === null || typeof d.return_routes !== "object" || Array.isArray(d.return_routes)) return "return_routes 格式错误";
+    for (const [k, v] of Object.entries(d.return_routes)) {
+      if (!NODE_RE.test(k)) return "return_routes 目标非法";
+      if (!["163", "9929", "CMIN2", "4837"].includes(v)) return "return_routes 线路非法";
+    }
+  }
   if (d.name !== undefined) {
     if (typeof d.name !== "string" || d.name.length < 1 || d.name.length > 32 || /[\x00-\x1f\x7f]/.test(d.name)) return "name 非法";
   }
@@ -200,6 +211,12 @@ async function handlePush(request, env) {
   await env.PROBE_KV.put("node:" + data.node + ":latest", JSON.stringify({ receivedAt: now, data }), { expirationTtl: 7 * 86400 });
   const first = await env.PROBE_KV.get("node:" + data.node + ":first_seen");
   if (first === null) await env.PROBE_KV.put("node:" + data.node + ":first_seen", String(now));
+  // 回程探测结果: 按目标节点 + 探测方运营商存, 1 小时过期, 状态接口只取 10 分钟内的
+  if (data.carrier && data.return_routes) {
+    for (const [target, label] of Object.entries(data.return_routes)) {
+      await env.PROBE_KV.put("return:" + target + ":" + data.carrier, JSON.stringify({ route: label, ts: now }), { expirationTtl: 3600 });
+    }
+  }
   return json({ ok: true });
 }
 
@@ -250,6 +267,14 @@ async function handleStatus(env) {
     let meta = null;
     const metaRaw = await env.PROBE_KV.get("node:" + id + ":meta");
     if (metaRaw) { try { meta = JSON.parse(metaRaw); } catch { meta = null; } }
+    // 回程: 取国内探测节点上报的各运营商线路, 只取 10 分钟内的
+    const retRaw = await Promise.all(["ct", "cu", "cm"].map((c) => env.PROBE_KV.get("return:" + id + ":" + c)));
+    const ret = {};
+    ["ct", "cu", "cm"].forEach((c, i) => {
+      let v = null;
+      if (retRaw[i]) { try { const p = JSON.parse(retRaw[i]); if (p && p.route && now - p.ts < 600) v = p.route; } catch { /* 忽略损坏记录 */ } }
+      ret[c] = v;
+    });
     nodes.push({
       id,
       online: now - parsed.receivedAt < ONLINE_THRESHOLD,
@@ -257,6 +282,7 @@ async function handleStatus(env) {
       firstSeen,
       data: parsed.data,
       meta,
+      ret,
     });
   }
   nodes.sort((a, b) => (a.id < b.id ? -1 : 1));
@@ -369,6 +395,7 @@ function pingRow(name,r){var ms=r&&r.avg!=null?Math.round(r.avg):null;var loss=r
  var w=ms==null?0:Math.min(100,ms/300*100);
  return '<div class="prow"><span>'+name+'</span><span>'+(ms==null?'—':ms+' ms')+'</span><span class="bar"><i style="width:'+w+'%;background:'+barColor(ms)+'"></i></span><span class="loss">'+(loss==null?'—':loss+'% 丢包')+'</span></div>'}
 function routeTag(v){if(!v)return '<span class="route-tag unknown">未知</span>';if(v==='未知')return '<span class="route-tag unknown">未知</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
+function retTag(v){if(!v)return '<span class="route-tag unknown">—</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
 // 圆盘指针仪表: 240 度表盘(左下 210 度经顶部到右下 -30 度), 指针指向数值, 颜色随阈值变
 function polar(cx,cy,r,deg){var a=deg*Math.PI/180;return [cx+r*Math.cos(a),cy-r*Math.sin(a)]}
 function arcD(cx,cy,r,a0,a1){var s=polar(cx,cy,r,a0),e=polar(cx,cy,r,a1);var large=(a0-a1)>180?1:0;return 'M '+s[0].toFixed(1)+' '+s[1].toFixed(1)+' A '+r+' '+r+' 0 '+large+' 1 '+e[0].toFixed(1)+' '+e[1].toFixed(1)}
@@ -411,10 +438,10 @@ function render(nodes,now){
   h+='<div class="rates"><span>↑ '+fmtRate(d.net_tx_rate)+'</span><span>↓ '+fmtRate(d.net_rx_rate)+'</span><span style="color:#8a90a0;font-size:13px">累计 ↑ '+fmtBytes(d.net_tx)+' ↓ '+fmtBytes(d.net_rx)+'</span></div>';
   h+='<div class="ping">'+pingRow('电信',d.ping.ct)+pingRow('联通',d.ping.cu)+pingRow('移动',d.ping.cm)+'</div>';
   h+='<table><tr><th>三网线路</th><th>去程</th><th>回程</th></tr>'
-   +'<tr><td>电信</td><td>'+routeTag(d.route.ct)+'</td><td><span class="route-tag unknown">—</span></td></tr>'
-   +'<tr><td>联通</td><td>'+routeTag(d.route.cu)+'</td><td><span class="route-tag unknown">—</span></td></tr>'
-   +'<tr><td>移动</td><td>'+routeTag(d.route.cm)+'</td><td><span class="route-tag unknown">—</span></td></tr></table>'
-   +'<div class="note">回程线路需国内节点探测, 当前未测。数据 '+timeAgo(n.lastSeen)+'更新。</div>';
+   +'<tr><td>电信</td><td>'+routeTag(d.route.ct)+'</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td></tr>'
+   +'<tr><td>联通</td><td>'+routeTag(d.route.cu)+'</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td></tr>'
+   +'<tr><td>移动</td><td>'+routeTag(d.route.cm)+'</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td></tr></table>'
+   +'<div class="note">回程线路由国内探测节点上报, 未上报时显示 —。数据 '+timeAgo(n.lastSeen)+'更新。</div>';
   h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button data-node="'+esc(n.id)+'">保存设置</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
   h+='</div>';
  });

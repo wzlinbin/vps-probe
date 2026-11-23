@@ -36,6 +36,8 @@ type config struct {
 	Token     string
 	Node      string
 	Name      string
+	Carrier   string
+	ReturnTargets string
 	Interval  time.Duration
 	Once      bool
 	AllowHTTP bool
@@ -48,6 +50,8 @@ func loadConfig() config {
 	flag.StringVar(&c.Token, "token", "", "上报 token (也可走环境变量 PROBE_TOKEN)")
 	flag.StringVar(&c.Node, "node", "", "节点 id, 如 la (也可走环境变量 PROBE_NODE)")
 	flag.StringVar(&c.Name, "name", "", "节点显示名, 如 洛杉矶 (也可走环境变量 PROBE_NAME, 不填则显示节点 id)")
+	flag.StringVar(&c.Carrier, "carrier", "", "本机所在运营商 ct/cu/cm, 用于回程探测 (也可走环境变量 PROBE_CARRIER)")
+	flag.StringVar(&c.ReturnTargets, "return-targets", "", "回程探测目标, 如 la:1.2.3.4,node2:5.6.7.8 (也可走环境变量 PROBE_RETURN_TARGETS)")
 	flag.DurationVar(&c.Interval, "interval", 30*time.Second, "上报间隔")
 	flag.BoolVar(&c.Once, "once", false, "只采集一次并打印 JSON，不上报")
 	flag.BoolVar(&c.AllowHTTP, "allow-http", false, "允许 http 上报(仅本地测试)")
@@ -65,6 +69,12 @@ func loadConfig() config {
 	}
 	if v := os.Getenv("PROBE_NAME"); v != "" && c.Name == "" {
 		c.Name = v
+	}
+	if v := os.Getenv("PROBE_CARRIER"); v != "" && c.Carrier == "" {
+		c.Carrier = v
+	}
+	if v := os.Getenv("PROBE_RETURN_TARGETS"); v != "" && c.ReturnTargets == "" {
+		c.ReturnTargets = v
 	}
 	if v := os.Getenv("PROBE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -84,6 +94,8 @@ type pingResult struct {
 type report struct {
 	Node     string                 `json:"node"`
 	Name     string                 `json:"name,omitempty"`
+	Carrier  string                 `json:"carrier,omitempty"`
+	ReturnRoutes map[string]string  `json:"return_routes,omitempty"`
 	TS       int64                  `json:"ts"`
 	Hostname string                 `json:"hostname"`
 	Uptime   int64                  `json:"uptime"` // 秒
@@ -111,8 +123,12 @@ var pingTargets = map[string][]string{
 
 // ---------- 采集 ----------
 
+type returnTarget struct{ node, ip string }
+
 type collector struct {
 	name      string
+	carrier   string
+	returnTargets []returnTarget
 	prevCPU   cpuSample
 	prevNet   netSample
 	prevNetAt time.Time
@@ -510,8 +526,29 @@ func (c *collector) collect(node string) report {
 	}
 	wg.Wait()
 
+	// 回程探测: 从本机(国内) traceroute 到目标 VPS, 分类后随本轮上报。
+	// 只有成功分类的才上报, 测不出(未知)不覆盖上一次的好结果。
+	var ret map[string]string
+	if c.carrier != "" && len(c.returnTargets) > 0 {
+		ret = map[string]string{}
+		var rwg sync.WaitGroup
+		var rmu sync.Mutex
+		for _, t := range c.returnTargets {
+			rwg.Add(1)
+			go func(t returnTarget) {
+				defer rwg.Done()
+				if label := tracerouteOne(t.ip); label != nil && *label != "未知" {
+					rmu.Lock()
+					ret[t.node] = *label
+					rmu.Unlock()
+				}
+			}(t)
+		}
+		rwg.Wait()
+	}
+
 	r := report{
-		Node: node, Name: c.name, TS: now.Unix(), Hostname: hn,
+		Node: node, Name: c.name, Carrier: c.carrier, ReturnRoutes: ret, TS: now.Unix(), Hostname: hn,
 		Uptime: readUptime(), CPU: cpu, Load: readLoad(),
 		MemTotal: memTotal, MemUsed: memUsed,
 		DiskTotal: diskTotal, DiskUsed: diskUsed,
@@ -583,8 +620,27 @@ func main() {
 			pingTargets[k] = []string{v}
 		}
 	}
+	if cfg.Carrier != "" && cfg.Carrier != "ct" && cfg.Carrier != "cu" && cfg.Carrier != "cm" {
+		fmt.Fprintln(os.Stderr, "carrier 只允许 ct/cu/cm")
+		os.Exit(2)
+	}
+	var rts []returnTarget
+	if cfg.ReturnTargets != "" {
+		for _, part := range strings.Split(cfg.ReturnTargets, ",") {
+			kv := strings.SplitN(strings.TrimSpace(part), ":", 2)
+			if len(kv) != 2 || net.ParseIP(kv[1]) == nil {
+				fmt.Fprintf(os.Stderr, "回程目标格式错误: %s (应为 节点id:IP, 如 la:1.2.3.4)\n", part)
+				os.Exit(2)
+			}
+			if ok, _ := regexp.MatchString(`^[a-z0-9][a-z0-9-]{0,31}$`, kv[0]); !ok {
+				fmt.Fprintln(os.Stderr, "回程目标节点 id 非法: "+kv[0])
+				os.Exit(2)
+			}
+			rts = append(rts, returnTarget{node: kv[0], ip: kv[1]})
+		}
+	}
 
-	c := &collector{name: cfg.Name}
+	c := &collector{name: cfg.Name, carrier: cfg.Carrier, returnTargets: rts}
 	if cfg.StateDir != "" {
 		c.statePath = filepath.Join(cfg.StateDir, "state.json")
 		c.loadState()

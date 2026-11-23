@@ -87,8 +87,13 @@ cd worker
 python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py deploy
 ```
 
-## 待做(以后)
+## 回程探测
 
-- 回程线路: 需要国内节点定时 traceroute 回来并上报
-- 掉线告警: Worker 定时任务检查 lastSeen, 超时发通知
-- 历史曲线: KV 存 24 小时采样点, 面板画小图
+回程只能从国内测: 在国内机器上跑 agent, 告诉它本机运营商与要测的目标节点, 它每 30 秒 traceroute 到目标 VPS 并把线路报回来, 面板上对应节点的回程列就有了。
+
+```bash
+# 国内电信机器, 测到 la 节点的回程 (la 后面填 LA 节点的公网 IP)
+curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <上报token> gz-ct "广州电信" ct "la:<LA 节点公网 IP>"
+```
+
+注意: 一台国内机器只能测它自己那条运营商的回程; 三条全要, 需电信/联通/移动各一台。回程数据 10 分钟没更新就显示 —。

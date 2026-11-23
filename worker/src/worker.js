@@ -421,6 +421,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 .nodehead h2{font-size:19px;margin:0}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:1px}
 .dot.on{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.2)}.dot.off{background:#cbd5e1}
 .nodehead .meta{color:#8a90a0;font-size:13px}
+.nodehead .meta .warn{color:#dc2626}
 .gauges{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 20px;margin-top:18px}
 .tile{text-align:center}.tile .lab{font-size:13px;color:#5b6474;display:flex;align-items:center;justify-content:center;gap:6px}
 .tile .big{font-size:22px;font-weight:650;margin-top:4px}
@@ -545,9 +546,12 @@ function render(nodes,now){
   var quotaPct=m.quotaGB?pct(traffic,m.quotaGB*1073741824):null;
   var remain='';
   if(m.expiresAt){var days=Math.ceil((new Date(m.expiresAt+'T00:00:00Z').getTime()-Date.now())/86400000);remain='剩余 '+days+' 天';}
+  var warn='';
+  if(remain)warn+=remain;
+  if(m.price)warn+=(warn?' · ':'')+'续费金额：'+esc(m.price);
   var displayName=(m.name&&m.name.length?m.name:(d.name&&d.name.length?d.name:n.id));
   var idSuffix=(displayName!==n.id)?' · '+esc(n.id):'';
-  h+='<div class="card" id="card-'+esc(n.id)+'"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 运行 '+fmtUptime(d.uptime)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
+  h+='<div class="card" id="card-'+esc(n.id)+'"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 运行 '+fmtUptime(d.uptime)+idSuffix+(warn?' · <span class="warn">'+warn+'</span>':'')+'</span></div>';
   h+='<div class="gauges">'
    +'<div class="tile"><div class="lab">CPU</div>'+gauge(d.cpu)+'<div class="small">'+d.load.map(function(x){return x.toFixed(2)}).join(', ')+'</div></div>'
    +'<div class="tile"><div class="lab">内存</div>'+gauge(memPct)+'<div class="small">'+fmtBytes(d.mem_used)+' / '+fmtBytes(d.mem_total)+'</div></div>'

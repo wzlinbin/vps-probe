@@ -2,7 +2,7 @@
 # 在 VPS 上安装 vps-probe-agent (需 root)
 # 用法: sudo bash install.sh <Worker地址> <上报token> [节点id] [显示名] [运营商ct/cu/cm] [回程目标, 如 la:1.2.3.4]
 # 节点 id 不写则按主机名自动生成; 显示名也可在面板上改
-# 缺失的 traceroute/ping 会自动尝试安装; 本地没有二进制时自动从 GitHub Release 下载
+# 缺失的 traceroute/ping/nexttrace 会自动尝试安装; 本地没有二进制时自动从 GitHub Release 下载
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -48,7 +48,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_PATH="$SCRIPT_DIR/$BIN"
 if [ ! -f "$BIN_PATH" ]; then
   # 本地没有二进制, 从 GitHub Release 下载
-  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/download/v1.0.4"
+  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/download/v1.0.5"
   echo "本地没有 $BIN, 从 $RELEASE_BASE 下载..."
   command -v curl >/dev/null || { echo "需要 curl 才能下载二进制" >&2; exit 1; }
   BIN_PATH="$(mktemp)"
@@ -78,6 +78,25 @@ install_deps() {
   command -v ping >/dev/null || echo "提示: ping 仍未安装, 三网延迟将显示为空"
 }
 install_deps
+
+# nexttrace(逐跳 ASN 判线, v1.7.6 已验证 --json 结构); 装不上只警告, agent 回落到 traceroute+网段表
+install_nexttrace() {
+  command -v nexttrace >/dev/null 2>&1 && return 0
+  local arch tmp
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) echo "提示: 不支持的架构 $(uname -m), 不装 nexttrace, 线路检测回落到 traceroute+网段表" >&2; return 0 ;;
+  esac
+  tmp="$(mktemp)"
+  if curl -fsSL --connect-timeout 10 --max-time 90 -o "$tmp" "https://github.com/nxtrace/NTrace-core/releases/download/v1.7.6/nexttrace_linux_${arch}" 2>/dev/null && [ -s "$tmp" ]; then
+    cp "$tmp" /usr/local/bin/nexttrace && chmod 0755 /usr/local/bin/nexttrace && echo "nexttrace 已安装 (v1.7.6)"
+  else
+    echo "警告: nexttrace 下载失败, 线路检测回落到 traceroute+网段表" >&2
+  fi
+  rm -f "$tmp"
+}
+install_nexttrace
 
 install -m 755 "$BIN_PATH" /usr/local/bin/vps-probe-agent
 

@@ -10,7 +10,7 @@ const PUSH_MIN_INTERVAL = 10; // 秒/节点
 const ONLINE_THRESHOLD = 120; // 秒内有上报算在线
 const MAX_BODY = 65536;
 const NODE_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const ROUTES = new Set(["163", "9929", "CMIN2", "4837", "未知"]);
+const ROUTES = new Set(["163", "CN2", "9929", "CMIN2", "4837", "9808", "未知"]);
 
 function secHeaders() {
   return {
@@ -103,7 +103,19 @@ function validateRoute(r) {
   for (const k of ["ct", "cu", "cm"]) {
     const v = r[k];
     if (v === undefined) return "route 缺少 " + k;
-    if (v !== null && (typeof v !== "string" || !ROUTES.has(v))) return "route." + k + " 非法";
+    if (v === null) continue;
+    // 兼容旧版 agent 的扁平格式: route.ct 直接是 "163" 这样的字符串
+    if (typeof v === "string") {
+      if (!ROUTES.has(v)) return "route." + k + " 非法";
+      continue;
+    }
+    if (typeof v !== "object" || Array.isArray(v)) return "route." + k + " 格式错误";
+    for (const city of ["sh", "gz", "bj"]) {
+      const cv = v[city];
+      if (cv === undefined) return "route." + k + " 缺少 " + city;
+      if (cv !== null && (typeof cv !== "string" || !ROUTES.has(cv))) return "route." + k + "." + city + " 非法";
+    }
+    for (const key of Object.keys(v)) if (!["sh", "gz", "bj"].includes(key)) return "route." + k + " 含未知字段";
   }
   for (const key of Object.keys(r)) if (!["ct", "cu", "cm"].includes(key)) return "route 含未知字段";
   return null;
@@ -376,7 +388,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 table{width:100%;border-collapse:collapse;margin-top:14px;font-size:14px}
 th,td{padding:8px 4px;text-align:left;border-bottom:1px solid #eef0f4}
 th{color:#8a90a0;font-weight:500;font-size:12px}
-.route-tag{display:inline-block;padding:2px 10px;border-radius:99px;background:#fef3c7;color:#92400e;font-size:13px}
+.route-tag{display:inline-block;padding:2px 10px;border-radius:99px;background:#fef3c7;color:#92400e;font-size:13px;margin:1px 4px 1px 0}
 .route-tag.unknown{background:#f1f5f9;color:#64748b}
 .note{color:#8a90a0;font-size:12px;margin-top:10px}
 .metaform{margin-top:16px;padding-top:14px;border-top:1px solid #eef0f4;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -402,6 +414,19 @@ function pingRow(name,r){var ms=r&&r.avg!=null?Math.round(r.avg):null;var loss=r
  var w=ms==null?0:Math.min(100,ms/300*100);
  return '<div class="prow"><span>'+name+'</span><span>'+(ms==null?'—':ms+' ms')+'</span><span class="bar"><i style="width:'+w+'%;background:'+barColor(ms)+'"></i></span><span class="loss">'+(loss==null?'—':(Math.round(loss*10)/10)+'% 丢包')+'</span></div>'}
 function routeTag(v){if(!v)return '<span class="route-tag unknown">未知</span>';if(v==='未知')return '<span class="route-tag unknown">未知</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
+function cityTags(r){
+  if(typeof r === 'string') return routeTag(r);
+  if(!r) return '<span class="route-tag unknown">未知</span>';
+  var cities=[['sh','沪'],['gz','粤'],['bj','京']];
+  var out='';
+  cities.forEach(function(c){
+    var v=r[c[0]];
+    if(v==null) return;
+    if(v==='未知') out+='<span class="route-tag unknown">'+c[1]+' 未知</span> ';
+    else out+='<span class="route-tag">'+c[1]+' '+esc(v)+'</span> ';
+  });
+  return out==='' ? '<span class="route-tag unknown">未知</span>' : out.trim();
+}
 function retTag(v){if(!v)return '<span class="route-tag unknown">—</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
 // 圆盘指针仪表: 240 度表盘(左下 210 度经顶部到右下 -30 度), 指针指向数值, 颜色随阈值变
 function polar(cx,cy,r,deg){var a=deg*Math.PI/180;return [cx+r*Math.cos(a),cy-r*Math.sin(a)]}
@@ -444,9 +469,9 @@ function render(nodes,now){
    +'<div class="t-right"><div class="t-rate">↑ '+fmtRate(d.net_tx_rate)+'　↓ '+fmtRate(d.net_rx_rate)+'</div><div class="small">累计 ↑ '+fmtBytes(d.net_tx)+'　↓ '+fmtBytes(d.net_rx)+'</div></div></div>';
   h+='<div class="ping">'+pingRow('电信',d.ping.ct)+pingRow('联通',d.ping.cu)+pingRow('移动',d.ping.cm)+'</div>';
   h+='<table><tr><th>三网线路</th><th>去程</th><th>回程</th></tr>'
-   +'<tr><td>电信</td><td>'+routeTag(d.route.ct)+'</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td></tr>'
-   +'<tr><td>联通</td><td>'+routeTag(d.route.cu)+'</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td></tr>'
-   +'<tr><td>移动</td><td>'+routeTag(d.route.cm)+'</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td></tr></table>'
+   +'<tr><td>电信</td><td>'+cityTags(d.route.ct)+'</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td></tr>'
+   +'<tr><td>联通</td><td>'+cityTags(d.route.cu)+'</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td></tr>'
+   +'<tr><td>移动</td><td>'+cityTags(d.route.cm)+'</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td></tr></table>'
    +'<div class="note">回程线路由国内探测节点上报, 未上报时显示 —。数据 '+timeAgo(n.lastSeen)+'更新。</div>';
   h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button data-node="'+esc(n.id)+'">保存设置</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
   h+='</div>';

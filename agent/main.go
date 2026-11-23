@@ -33,16 +33,16 @@ import (
 // ---------- 配置 ----------
 
 type config struct {
-	URL       string
-	Token     string
-	Node      string
-	Name      string
-	Carrier   string
+	URL           string
+	Token         string
+	Node          string
+	Name          string
+	Carrier       string
 	ReturnTargets string
-	Interval  time.Duration
-	Once      bool
-	AllowHTTP bool
-	StateDir  string
+	Interval      time.Duration
+	Once          bool
+	AllowHTTP     bool
+	StateDir      string
 }
 
 func loadConfig() config {
@@ -93,33 +93,41 @@ type pingResult struct {
 }
 
 type report struct {
-	Node     string                 `json:"node"`
-	Name     string                 `json:"name,omitempty"`
-	Carrier  string                 `json:"carrier,omitempty"`
-	ReturnRoutes map[string]string  `json:"return_routes,omitempty"`
-	TS       int64                  `json:"ts"`
-	Hostname string                 `json:"hostname"`
-	Uptime   int64                  `json:"uptime"` // 秒
-	CPU      float64                `json:"cpu"`    // %
-	Load     [3]float64             `json:"load"`
-	MemTotal uint64                 `json:"mem_total"`
-	MemUsed  uint64                 `json:"mem_used"`
-	DiskTotal uint64                `json:"disk_total"`
-	DiskUsed  uint64                `json:"disk_used"`
-	NetRx    uint64                 `json:"net_rx"`      // 累计接收字节(跨重启累计)
-	NetTx    uint64                 `json:"net_tx"`      // 累计发送字节(跨重启累计)
-	NetRxRate uint64                `json:"net_rx_rate"` // B/s
-	NetTxRate uint64                `json:"net_tx_rate"` // B/s
-	Ping     map[string]*pingResult `json:"ping"`        // ct/cu/cm
-	Route    map[string]*string     `json:"route"`       // ct/cu/cm -> 163/9929/CMIN2/4837/未知
+	Node         string                        `json:"node"`
+	Name         string                        `json:"name,omitempty"`
+	Carrier      string                        `json:"carrier,omitempty"`
+	ReturnRoutes map[string]string             `json:"return_routes,omitempty"`
+	TS           int64                         `json:"ts"`
+	Hostname     string                        `json:"hostname"`
+	Uptime       int64                         `json:"uptime"` // 秒
+	CPU          float64                       `json:"cpu"`    // %
+	Load         [3]float64                    `json:"load"`
+	MemTotal     uint64                        `json:"mem_total"`
+	MemUsed      uint64                        `json:"mem_used"`
+	DiskTotal    uint64                        `json:"disk_total"`
+	DiskUsed     uint64                        `json:"disk_used"`
+	NetRx        uint64                        `json:"net_rx"`      // 累计接收字节(跨重启累计)
+	NetTx        uint64                        `json:"net_tx"`      // 累计发送字节(跨重启累计)
+	NetRxRate    uint64                        `json:"net_rx_rate"` // B/s
+	NetTxRate    uint64                        `json:"net_tx_rate"` // B/s
+	Ping         map[string]*pingResult        `json:"ping"`        // ct/cu/cm
+	Route        map[string]map[string]*string `json:"route"`       // ct/cu/cm -> sh/gz/bj -> 163/CN2/9929/4837/CMIN2/9808/未知
 }
 
 // 三网探测目标(各家常用 DNS, 可被环境变量覆盖 PROBE_PING_CT/CU/CM)
 var pingTargets = map[string][]string{
 	// 每运营商多个目标: 主目标 100% 丢包时自动换备用目标重测
 	"ct": {"114.114.114.114", "202.96.128.86", "61.139.2.69"}, // 电信
-	"cu": {"123.125.81.6", "210.21.196.6"},                   // 联通
-	"cm": {"211.136.17.107", "120.196.165.24"},               // 移动
+	"cu": {"123.125.81.6", "210.21.196.6"},                    // 联通
+	"cm": {"211.136.17.107", "120.196.165.24"},                // 移动
+}
+
+// 去程线路探测目标: 每运营商 3 个城市骨干节点, 用于区分线路类型
+// (电信 163/CN2, 联通 4837/9929, 移动 9808/CMIN2)。
+var routeTargets = map[string]map[string]string{
+	"ct": {"sh": "101.95.120.1", "gz": "14.215.116.1", "bj": "219.141.136.10"},     // 电信 上海/广州/北京
+	"cu": {"sh": "112.65.63.1", "gz": "210.21.196.6", "bj": "123.125.99.1"},        // 联通 上海/广州/北京
+	"cm": {"sh": "120.204.197.1", "gz": "120.196.165.24", "bj": "221.179.155.161"}, // 移动 上海/广州/北京
 }
 
 // ---------- 采集 ----------
@@ -127,18 +135,18 @@ var pingTargets = map[string][]string{
 type returnTarget struct{ node, ip string }
 
 type collector struct {
-	name      string
-	carrier   string
+	name          string
+	carrier       string
 	returnTargets []returnTarget
-	prevCPU   cpuSample
-	prevNet   netSample
-	prevNetAt time.Time
-	statePath string
-	cumRx     uint64
-	cumTx     uint64
-	lastRx    uint64
-	lastTx    uint64
-	haveState bool
+	prevCPU       cpuSample
+	prevNet       netSample
+	prevNetAt     time.Time
+	statePath     string
+	cumRx         uint64
+	cumTx         uint64
+	lastRx        uint64
+	lastTx        uint64
+	haveState     bool
 }
 
 type cpuSample struct {
@@ -367,6 +375,26 @@ func runCmd(ctx context.Context, name string, args ...string) (string, error) {
 	return out.String(), err
 }
 
+// runCmdSplit 与 runCmd 相同, 但 stdout/stderr 分开(nexttrace 的日志在 stderr, 不能混进要解析的 JSON)。
+func runCmdSplit(ctx context.Context, name string, args ...string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	return outBuf.String(), errBuf.String(), err
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 120 {
+		s = s[:120]
+	}
+	return strings.TrimSpace(s)
+}
+
 func pingOne(target string) *pingResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -399,18 +427,21 @@ func pingWithFallback(targets []string) (*pingResult, string) {
 	}
 	return last, used
 }
-// 163: 202.97/16, 59.43/16; 9929: 219.158/16, 210.22/16;
+
+// 线路分类: 按跳点 IP 的网段启发式判断, 命中即返回, 命中不了返回"未知"。
+// 163: 202.97/16; CN2: 59.43/16; 9929: 219.158/16, 210.22/16;
 // CMIN2: 223.96/16, 223.99/16, 211.136/16, 183.240/16, 120.196/16, 117.128/16;
-// 4837(联通169): 218.105/16。
+// 4837(联通169): 218.105/16; 9808(移动普通): 221.179/16, 120.204/16。
 var routePrefixes = []struct {
 	prefix string
 	label  string
 }{
-	{"202.97.", "163"}, {"59.43.", "163"},
+	{"202.97.", "163"}, {"59.43.", "CN2"},
 	{"219.158.", "9929"}, {"210.22.", "9929"},
 	{"223.96.", "CMIN2"}, {"223.99.", "CMIN2"}, {"211.136.", "CMIN2"},
 	{"183.240.", "CMIN2"}, {"120.196.", "CMIN2"}, {"117.128.", "CMIN2"},
 	{"218.105.", "4837"},
+	{"221.179.", "9808"}, {"120.204.", "9808"},
 }
 
 func classifyIP(ip string) string {
@@ -466,6 +497,90 @@ func classifyRoute(out string) string {
 	return ""
 }
 
+// 线路判断: 优先用 nexttrace 逐跳 ASN(比写死网段更根本, ASN 不会过时)。
+// 4134 电信 163, 4809 电信 CN2, 9929 联通精品, 4837 联通 169,
+// 58807 移动 CMIN2, 9808/56048/24400 移动普通(后两者是移动地方网 AS, 圈内统称 9808)。
+var asnLabels = map[int]string{
+	4134: "163", 4809: "CN2",
+	9929: "9929", 4837: "4837",
+	58807: "CMIN2",
+	9808:  "9808", 56048: "9808", 24400: "9808",
+}
+
+// nexttrace --json 输出结构(只取需要的字段; 按 NTrace-core v1.7.6 源码核对:
+// Result.Hops [][]Hop, Hop.Geo 是 *ipgeo.IPGeoData, 其 asnumber 如 "AS4134")。
+type ntGeo struct {
+	Asnumber string `json:"asnumber"`
+}
+type ntHop struct {
+	Success bool            `json:"Success"`
+	Address json.RawMessage `json:"Address"`
+	Geo     *ntGeo          `json:"Geo"`
+}
+type ntResult struct {
+	Hops [][]ntHop `json:"Hops"`
+}
+
+// nexttrace JSON 里 Hop.Address 是字符串 IP(无回包的跳点为 null)。
+func ntHopIP(raw json.RawMessage) string {
+	var ip string
+	if len(raw) == 0 {
+		return ""
+	}
+	if err := json.Unmarshal(raw, &ip); err != nil {
+		return ""
+	}
+	return ip
+}
+
+// classifyNtHops 按 TTL 顺序取第一个能判出线路的跳点:
+// 有 ASN 就按 ASN 判, 无 ASN 用跳点 IP 走网段表, 都判不出返回"未知"。
+func classifyNtHops(hops [][]ntHop) string {
+	for _, ttlHops := range hops {
+		for _, h := range ttlHops {
+			if !h.Success {
+				continue
+			}
+			if h.Geo != nil && h.Geo.Asnumber != "" {
+				num := strings.TrimPrefix(strings.TrimPrefix(h.Geo.Asnumber, "AS"), "as")
+				if n, err := strconv.Atoi(num); err == nil {
+					if label, ok := asnLabels[n]; ok {
+						return label
+					}
+				}
+			}
+			if ip := ntHopIP(h.Address); ip != "" {
+				if label := classifyIP(ip); label != "" {
+					return label
+				}
+			}
+		}
+	}
+	return "未知"
+}
+
+// 用 nexttrace 测到目标的线路(-M 关掉 maptrace, 否则其 API 失败会吞掉 JSON 输出)。
+// nexttrace 不可用、运行失败或解析失败时返回 nil, 由调用方回落到系统 traceroute。
+func routeViaNexttrace(target string) *string {
+	if _, err := exec.LookPath("nexttrace"); err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+	defer cancel()
+	out, errOut, err := runCmdSplit(ctx, "nexttrace", "--json", "-q", "1", "-m", "20", "-M", target)
+	if err != nil {
+		logf("nexttrace 失败(%s): %s", target, firstLine(errOut))
+		return nil
+	}
+	var res ntResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		logf("nexttrace 输出解析失败(%s): %v", target, err)
+		return nil
+	}
+	label := classifyNtHops(res.Hops)
+	return &label
+}
+
 // ---------- 采集入口 ----------
 
 func (c *collector) collect(node string) report {
@@ -510,20 +625,38 @@ func (c *collector) collect(node string) report {
 	diskTotal, diskUsed := readDisk()
 
 	ping := map[string]*pingResult{}
-	route := map[string]*string{}
+	route := map[string]map[string]*string{}
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	for k, targets := range pingTargets {
 		wg.Add(1)
 		go func(k string, targets []string) {
 			defer wg.Done()
-			p, used := pingWithFallback(targets)
-			rt := tracerouteOne(used)
+			p, _ := pingWithFallback(targets)
 			mu.Lock()
 			ping[k] = p
-			route[k] = rt
 			mu.Unlock()
 		}(k, targets)
+	}
+	// 去程线路: 每运营商 3 个城市各测一次, 并发执行;
+	// 优先 nexttrace(逐跳 ASN), 不可用或失败时回落系统 traceroute+网段表
+	for k, cities := range routeTargets {
+		for city, target := range cities {
+			wg.Add(1)
+			go func(k, city, target string) {
+				defer wg.Done()
+				rt := routeViaNexttrace(target)
+				if rt == nil {
+					rt = tracerouteOne(target)
+				}
+				mu.Lock()
+				if route[k] == nil {
+					route[k] = map[string]*string{}
+				}
+				route[k][city] = rt
+				mu.Unlock()
+			}(k, city, target)
+		}
 	}
 	wg.Wait()
 
@@ -650,6 +783,11 @@ func main() {
 	if cfg.Node == "" {
 		cfg.Node = deriveNodeID()
 		logf("未指定节点 id, 已按主机名自动生成: %s", cfg.Node)
+	}
+	if _, err := exec.LookPath("nexttrace"); err == nil {
+		logf("线路检测: nexttrace (逐跳 ASN)")
+	} else {
+		logf("线路检测: traceroute + 网段表 (未装 nexttrace)")
 	}
 	for k, env := range map[string]string{"ct": "PROBE_PING_CT", "cu": "PROBE_PING_CU", "cm": "PROBE_PING_CM"} {
 		if v := os.Getenv(env); v != "" {

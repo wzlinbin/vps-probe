@@ -596,13 +596,12 @@ function cityTags(r){
   return out==='' ? '<span class="route-tag unknown">未知</span>' : out.trim();
 }
 function retTag(v){if(!v)return '<span class="route-tag unknown">—</span>';var label=String(v).split(' ').pop();return '<span class="route-tag">'+esc(lineDisplay(label))+'</span>'}
-// 三段小字: 出口/跨境/国内, 无数据时不显示
+// 三段小字: 跨境路由/国内路由(出口不显示), 无数据时不显示
 function segHtml(seg){
   if(!seg||typeof seg!=='object') return '';
   var out='';
-  if(seg.exit) out+='<div class="seg">出口：'+esc(seg.exit)+'</div>';
-  if(seg.border) out+='<div class="seg">跨境：'+esc(seg.border)+'</div>';
-  if(seg.domestic) out+='<div class="seg">国内：'+esc(seg.domestic)+'</div>';
+  if(seg.border) out+='<div class="seg">跨境路由：'+esc(seg.border)+'</div>';
+  if(seg.domestic) out+='<div class="seg">国内路由：'+esc(seg.domestic)+'</div>';
   return out ? '<div class="segs">'+out+'</div>' : '';
 }
 // 回程三段: agent 上报的 route_segments, 结构与 route 同形(ct/cu/cm -> hz -> {exit,border,domestic})

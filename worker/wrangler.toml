@@ -6,3 +6,10 @@ workers_dev = true
 [[kv_namespaces]]
 binding = "PROBE_KV"
 id = "02c6577154654aec8bb7a0436d0e3ca3"
+
+# 去程探测 agent (boce.aliyun.com): 常驻 Workflow, 测一轮 -> 睡 7 天/5 分钟 -> 再测.
+# 替代 VM 上 systemd 跑的 probe.py --daemon. Requires Workers Paid.
+[[workflows]]
+name = "vps-probe-boce"
+binding = "BOCE_WORKFLOW"
+class_name = "BoceWorkflow"

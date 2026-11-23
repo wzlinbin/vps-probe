@@ -1,9 +1,11 @@
-// vps-probe Worker: 面板 + 上报 API
+// vps-probe Worker: 面板 + 上报 API + 去程探测 agent(BoceWorkflow, 见 src/boce-workflow.js)
 // 安全要点:
 // - 面板需密码登录(Session Cookie, HttpOnly/Secure/SameSite, KV 存储, 7 天过期, 登录限流)
 // - 上报需 Bearer token(与 secret 做 SHA-256 后定长比较), 严格 schema 校验, 限流 10 秒/节点
 // - 所有响应带安全头, API 与页面均为 no-store; 不记录、不返回任何 secret
 // - KV 只存节点快照/首次上线时间/节点元信息, 不存 token
+
+export { BoceWorkflow } from './boce-workflow.js';
 
 const SESSION_TTL = 7 * 86400; // 秒
 const PUSH_MIN_INTERVAL = 10; // 秒/节点
@@ -194,6 +196,14 @@ export default {
       if (!(await getSession(request, env))) return json({ error: "未登录" }, 401);
       return handleRefreshRoutes(request, env);
     }
+    if (path === "/api/boce/start" && request.method === "POST") {
+      if (!(await getSession(request, env))) return json({ error: "未登录" }, 401);
+      return handleBoceStart(env);
+    }
+    if (path === "/api/boce/status" && request.method === "GET") {
+      if (!(await getSession(request, env))) return json({ error: "未登录" }, 401);
+      return handleBoceStatus(env);
+    }
     if (path === "/" && request.method === "GET") {
       if (await getSession(request, env)) return html(DASHBOARD_HTML);
       return html(LOGIN_HTML);
@@ -201,6 +211,27 @@ export default {
     return json({ error: "not found" }, 404);
   },
 };
+
+async function handleBoceStart(env) {
+  // 单例 agent: 固定 id "boce-agent"; 已在跑时 create 会抛错, 返回已在跑.
+  try {
+    const instance = await env.BOCE_WORKFLOW.create({ id: "boce-agent", params: {} });
+    return json({ ok: true, started: true, id: instance.id });
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/already exists|duplicate/i.test(msg)) return json({ ok: true, started: false, note: "已在运行" });
+    return json({ ok: false, error: msg.slice(0, 200) }, 500);
+  }
+}
+
+async function handleBoceStatus(env) {
+  try {
+    const instance = await env.BOCE_WORKFLOW.get("boce-agent");
+    return json({ ok: true, status: instance.status });
+  } catch (e) {
+    return json({ ok: true, status: "not-started", note: String(e && e.message || e).slice(0, 120) });
+  }
+}
 
 async function handlePush(request, env) {
   const auth = request.headers.get("authorization") || "";

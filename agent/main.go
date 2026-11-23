@@ -1,7 +1,9 @@
 // vps-probe-agent: 轻量 VPS 探针 agent，零外部依赖，只用 Go 标准库。
 //
 // 采集: CPU、loadavg、内存、硬盘、流量(速率+累计)、uptime,
-// 三网 ping 延迟/丢包、去程 traceroute 线路分类(163/9929/CMIN2/4837)。
+// 三网 ping 延迟/丢包、回程 traceroute 线路分类(163/9929/CMIN2/4837)。
+// (方向以国内用户为准: 去程=国内 IP->VPS, 回程=VPS->国内 IP;
+//  本 agent 在 VPS 上向国内目标做 traceroute, 测的是回程。)
 // 上报: 每 interval 秒向 Worker POST 一次 JSON，Bearer token 鉴权。
 // 本身不监听任何端口，只出站 HTTPS。
 package main
@@ -54,8 +56,8 @@ func loadConfig() config {
 	flag.StringVar(&c.Token, "token", "", "上报 token (也可走环境变量 PROBE_TOKEN)")
 	flag.StringVar(&c.Node, "node", "", "节点 id, 如 la (也可走环境变量 PROBE_NODE)")
 	flag.StringVar(&c.Name, "name", "", "节点显示名, 如 洛杉矶 (也可走环境变量 PROBE_NAME, 不填则显示节点 id)")
-	flag.StringVar(&c.Carrier, "carrier", "", "本机所在运营商 ct/cu/cm, 用于回程探测 (也可走环境变量 PROBE_CARRIER)")
-	flag.StringVar(&c.ReturnTargets, "return-targets", "", "回程探测目标, 如 la:1.2.3.4,node2:5.6.7.8 (也可走环境变量 PROBE_RETURN_TARGETS)")
+	flag.StringVar(&c.Carrier, "carrier", "", "本机所在运营商 ct/cu/cm, 用于去程探测 (也可走环境变量 PROBE_CARRIER)")
+	flag.StringVar(&c.ReturnTargets, "return-targets", "", "去程探测目标, 如 la:1.2.3.4,node2:5.6.7.8 (也可走环境变量 PROBE_RETURN_TARGETS)")
 	flag.DurationVar(&c.Interval, "interval", 30*time.Second, "上报间隔")
 	flag.DurationVar(&c.RouteInterval, "route-interval", 24*time.Hour, "有线路结果时的探测间隔, 如 24h; 无结果时 5 分钟重试")
 	flag.BoolVar(&c.Once, "once", false, "只采集一次并打印 JSON，不上报")
@@ -131,7 +133,7 @@ var pingTargets = map[string][]string{
 	"cm": {"211.136.17.107", "120.196.165.24"},                // 移动
 }
 
-// 去程线路探测目标: 杭州, 每运营商 2 个 IP 互为备份, 用于区分线路类型
+// 回程线路探测目标: 杭州, 每运营商 2 个 IP 互为备份, 用于区分线路类型
 // (电信 163/CN2, 联通 4837/9929, 移动 9808/CMIN2); 任一能分类即为该运营商的杭州线路。
 var routeTargets = map[string][]string{
 	"ct": {"115.239.211.112", "122.224.186.100"}, // 电信 杭州 IDC

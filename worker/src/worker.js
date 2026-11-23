@@ -133,7 +133,7 @@ function validateReport(d) {
     if (!["ct", "cu", "cm"].includes(d.carrier)) return "carrier 非法";
   }
   if (d.return_routes !== undefined) {
-    if (d.carrier === undefined) return "回程上报需 carrier";
+    if (d.carrier === undefined) return "去程上报需 carrier";
     if (d.return_routes === null || typeof d.return_routes !== "object" || Array.isArray(d.return_routes)) return "return_routes 格式错误";
     for (const [k, v] of Object.entries(d.return_routes)) {
       if (!NODE_RE.test(k)) return "return_routes 目标非法";
@@ -238,7 +238,7 @@ async function handlePush(request, env) {
   await env.PROBE_KV.put("node:" + data.node + ":latest", JSON.stringify({ receivedAt: now, data }), { expirationTtl: 7 * 86400 });
   const first = await env.PROBE_KV.get("node:" + data.node + ":first_seen");
   if (first === null) await env.PROBE_KV.put("node:" + data.node + ":first_seen", String(now));
-  // 回程探测结果: 按目标节点 + 探测方运营商存, 1 小时过期, 状态接口只取 10 分钟内的
+  // 去程探测结果: 国内探测节点向目标 VPS 探测, 按目标节点 + 探测方运营商存, 1 小时过期, 状态接口只取 10 分钟内的
   if (data.carrier && data.return_routes) {
     for (const [target, label] of Object.entries(data.return_routes)) {
       await env.PROBE_KV.put("return:" + target + ":" + data.carrier, JSON.stringify({ route: label, ts: now }), { expirationTtl: 3600 });
@@ -314,7 +314,7 @@ async function handleStatus(env) {
     let meta = null;
     const metaRaw = await env.PROBE_KV.get("node:" + id + ":meta");
     if (metaRaw) { try { meta = JSON.parse(metaRaw); } catch { meta = null; } }
-    // 回程: 取国内探测节点上报的各运营商线路, 只取 10 分钟内的
+    // 去程: 取国内探测节点上报的各运营商线路, 只取 10 分钟内的
     const retRaw = await Promise.all(["ct", "cu", "cm"].map((c) => env.PROBE_KV.get("return:" + id + ":" + c)));
     const ret = {};
     ["ct", "cu", "cm"].forEach((c, i) => {
@@ -367,7 +367,7 @@ async function handleMeta(request, env) {
   return json({ ok: true });
 }
 
-// 删除节点: 删上报记录、首次上报时间、备注设置及该节点作为回程目标的记录。
+// 删除节点: 删上报记录、首次上报时间、备注设置及该节点作为去程目标的记录。
 // agent 若仍在运行, 下次上报(30 秒内)会重新出现, 所以只对死节点真正有效。
 async function handleNodeDelete(request, env) {
   let body;
@@ -592,10 +592,10 @@ function render(nodes,now){
    +'<div class="t-right"><div class="t-rate">↑ '+fmtRate(d.net_tx_rate)+'　↓ '+fmtRate(d.net_rx_rate)+'</div><div class="small">累计 ↑ '+fmtBytes(d.net_tx)+'　↓ '+fmtBytes(d.net_rx)+'</div></div></div>';
   h+='<div class="ping">'+pingRow('电信',d.ping.ct)+pingRow('联通',d.ping.cu)+pingRow('移动',d.ping.cm)+'</div>';
   h+='<table><tr><th>三网线路</th><th>去程</th><th>回程</th></tr>'
-   +'<tr><td>电信</td><td>'+cityTags(d.route.ct)+'</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td></tr>'
-   +'<tr><td>联通</td><td>'+cityTags(d.route.cu)+'</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td></tr>'
-   +'<tr><td>移动</td><td>'+cityTags(d.route.cm)+'</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td></tr></table>'
-   +'<div class="note">回程线路由国内探测节点上报, 未上报时显示 —。数据 '+timeAgo(n.lastSeen)+'更新。</div>'
+   +'<tr><td>电信</td><td>'+retTag(n.ret?n.ret.ct:null)+'</td><td>'+cityTags(d.route.ct)+'</td></tr>'
+   +'<tr><td>联通</td><td>'+retTag(n.ret?n.ret.cu:null)+'</td><td>'+cityTags(d.route.cu)+'</td></tr>'
+   +'<tr><td>移动</td><td>'+retTag(n.ret?n.ret.cm:null)+'</td><td>'+cityTags(d.route.cm)+'</td></tr></table>'
+   +'<div class="note">去程线路由国内探测节点上报, 未上报时显示 —。回程线路为本节点向杭州目标探测的结果。数据 '+timeAgo(n.lastSeen)+'更新。</div>'
    +'<div class="routes-actions"><button class="refresh-routes" data-node="'+esc(n.id)+'">立即检测</button><span class="refresh-status" id="rs-'+esc(n.id)+'"></span></div>';
   h+='<div class="metaform"><input id="n-'+esc(n.id)+'" type="text" maxlength="32" placeholder="备注名, 如 洛杉矶" value="'+esc(m.name||'')+'" style="width:160px"><input id="q-'+esc(n.id)+'" type="number" min="0" step="1" placeholder="流量配额 GB" value="'+(m.quotaGB||'')+'"><input id="e-'+esc(n.id)+'" type="date" value="'+(m.expiresAt||'')+'"><input id="p-'+esc(n.id)+'" type="text" placeholder="月费, 如 $3/月" value="'+esc(m.price||'')+'"><button class="save" data-node="'+esc(n.id)+'">保存设置</button><button class="del" data-node="'+esc(n.id)+'">删除节点</button><span class="saved" id="s-'+esc(n.id)+'"></span></div>';
   h+='</div>';

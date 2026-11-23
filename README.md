@@ -34,9 +34,12 @@ Agent 每 30 秒 POST 一次 JSON 到 `https://vps-probe.wzlinbin.workers.dev/ap
 不用手工传文件, 在 VPS 上一条命令(会从 GitHub 拉 install.sh, 再自动下对应架构的二进制):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <上报token> <节点id>
-# 例如: curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <token> la
+curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <上报token> <节点id> [显示名]
+# 例如: curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <token> la "洛杉矶"
 ```
+
+第 4 个参数是面板上显示的名字, 不填则显示节点 id; 重装时不给也会沿用上次的。
+install.sh 会自动安装缺失的 traceroute/ping(apt/dnf/yum/apk), 装不上只警告、不中断安装。
 
 安装脚本会: 装二进制到 /usr/local/bin、写 600 权限的 /etc/vps-probe/env、
 写 systemd unit、干跑一次验证采集、enable 并启动。

@@ -1,8 +1,8 @@
 #!/bin/bash
 # 在 VPS 上安装 vps-probe-agent (需 root)
-# 用法: sudo bash install.sh <Worker地址> <上报token> <节点id>
-# 示例: sudo bash install.sh https://vps-probe.xxx.workers.dev <token> la
-# 二进制文件须与本脚本在同一目录: vps-probe-agent-linux-amd64 或 -arm64
+# 用法: sudo bash install.sh <Worker地址> <上报token> <节点id> [显示名]
+# 示例: sudo bash install.sh https://vps-probe.xxx.workers.dev <token> la "洛杉矶"
+# 缺失的 traceroute/ping 会自动尝试安装; 本地没有二进制时自动从 GitHub Release 下载
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -13,9 +13,14 @@ fi
 URL="${1:-}"
 TOKEN="${2:-}"
 NODE="${3:-}"
+NAME="${4:-}"
 if [ -z "$URL" ] || [ -z "$TOKEN" ] || [ -z "$NODE" ]; then
-  echo "用法: sudo bash $0 <Worker地址> <上报token> <节点id>" >&2
+  echo "用法: sudo bash $0 <Worker地址> <上报token> <节点id> [显示名]" >&2
   exit 1
+fi
+# 重装时没给显示名, 沿用上次的
+if [ -z "$NAME" ] && [ -f /etc/vps-probe/env ]; then
+  NAME="$(grep '^PROBE_NAME=' /etc/vps-probe/env 2>/dev/null | cut -d= -f2- || true)"
 fi
 case "$URL" in
   https://*) ;;
@@ -35,7 +40,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_PATH="$SCRIPT_DIR/$BIN"
 if [ ! -f "$BIN_PATH" ]; then
   # 本地没有二进制, 从 GitHub Release 下载
-  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/download/v1.0.0"
+  RELEASE_BASE="https://github.com/wzlinbin/vps-probe/releases/download/v1.0.1"
   echo "本地没有 $BIN, 从 $RELEASE_BASE 下载..."
   command -v curl >/dev/null || { echo "需要 curl 才能下载二进制" >&2; exit 1; }
   BIN_PATH="$(mktemp)"
@@ -43,17 +48,38 @@ if [ ! -f "$BIN_PATH" ]; then
   chmod 755 "$BIN_PATH"
 fi
 
-command -v ping >/dev/null || echo "警告: 未找到 ping, 三网延迟将显示为空"
-command -v traceroute >/dev/null || echo "警告: 未找到 traceroute, 去程线路将显示为未知 (apt install traceroute / yum install traceroute)"
+# 缺失的软件自动安装 (traceroute 测去程线路, ping 测三网延迟)
+install_deps() {
+  local need=""
+  command -v traceroute >/dev/null || need="$need traceroute"
+  command -v ping >/dev/null || need="$need ping"
+  [ -z "$need" ] && return 0
+  echo "缺少:$need, 尝试自动安装..."
+  if command -v apt-get >/dev/null; then
+    (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq traceroute iputils-ping) || echo "警告: 自动安装失败, 请手工安装:$need (去程线路/延迟将显示为空)"
+  elif command -v dnf >/dev/null; then
+    dnf install -y -q traceroute iputils || echo "警告: 自动安装失败, 请手工安装:$need"
+  elif command -v yum >/dev/null; then
+    yum install -y -q traceroute iputils || echo "警告: 自动安装失败, 请手工安装:$need"
+  elif command -v apk >/dev/null; then
+    apk add --no-cache traceroute iputils || echo "警告: 自动安装失败, 请手工安装:$need"
+  else
+    echo "警告: 未找到包管理器, 请手工安装:$need (去程线路/延迟将显示为空)"
+  fi
+  command -v traceroute >/dev/null || echo "提示: traceroute 仍未安装, 去程线路将显示为未知"
+  command -v ping >/dev/null || echo "提示: ping 仍未安装, 三网延迟将显示为空"
+}
+install_deps
 
 install -m 755 "$BIN_PATH" /usr/local/bin/vps-probe-agent
 
 mkdir -p /etc/vps-probe /var/lib/vps-probe
-cat > /etc/vps-probe/env <<EOF
-PROBE_URL=$URL/api/push
-PROBE_TOKEN=$TOKEN
-PROBE_NODE=$NODE
-EOF
+{
+  echo "PROBE_URL=$URL/api/push"
+  echo "PROBE_TOKEN=$TOKEN"
+  echo "PROBE_NODE=$NODE"
+  [ -n "$NAME" ] && echo "PROBE_NAME=$NAME"
+} > /etc/vps-probe/env
 chmod 600 /etc/vps-probe/env
 
 cat > /etc/systemd/system/vps-probe-agent.service <<'EOF'
@@ -81,7 +107,8 @@ echo "== 干跑验证采集 =="
 /usr/local/bin/vps-probe-agent -once | head -30
 
 systemctl daemon-reload
-systemctl enable --now vps-probe-agent
+systemctl enable vps-probe-agent
+systemctl restart vps-probe-agent
 sleep 3
 systemctl is-active --quiet vps-probe-agent || { echo "服务启动失败, 查看日志:"; journalctl -u vps-probe-agent -n 30 --no-pager; exit 1; }
 echo "== 安装完成, 服务运行中 =="

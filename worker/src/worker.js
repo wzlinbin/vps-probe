@@ -111,10 +111,13 @@ function validateRoute(r) {
 
 function validateReport(d) {
   if (d === null || typeof d !== "object" || Array.isArray(d)) return "body 必须是 JSON 对象";
-  const allowed = new Set(["node", "ts", "hostname", "uptime", "cpu", "load", "mem_total", "mem_used",
+  const allowed = new Set(["node", "name", "ts", "hostname", "uptime", "cpu", "load", "mem_total", "mem_used",
     "disk_total", "disk_used", "net_rx", "net_tx", "net_rx_rate", "net_tx_rate", "ping", "route"]);
   for (const k of Object.keys(d)) if (!allowed.has(k)) return "未知字段: " + k;
   if (typeof d.node !== "string" || !NODE_RE.test(d.node)) return "node 非法";
+  if (d.name !== undefined) {
+    if (typeof d.name !== "string" || d.name.length < 1 || d.name.length > 32 || /[\x00-\x1f\x7f]/.test(d.name)) return "name 非法";
+  }
   if (!isNum(d.ts, 0, 4102444800)) return "ts 非法";
   if (Math.abs(Date.now() / 1000 - d.ts) > 3600) return "ts 与服务器时间相差超过 1 小时";
   if (typeof d.hostname !== "string" || d.hostname.length > 64) return "hostname 非法";
@@ -323,9 +326,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 .dot.on{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.2)}.dot.off{background:#cbd5e1}
 .nodehead .meta{color:#8a90a0;font-size:13px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;margin-top:18px}
-.tile .lab{font-size:13px;color:#5b6474;display:flex;align-items:center;gap:6px}
+.tile{text-align:center}.tile .lab{font-size:13px;color:#5b6474;display:flex;align-items:center;justify-content:center;gap:6px}
 .tile .big{font-size:22px;font-weight:650;margin-top:4px}
 .tile .small{font-size:12px;color:#8a90a0;margin-top:2px}
+.gauge{width:150px;max-width:100%;display:block;margin:0 auto}
 .rates{display:flex;gap:24px;margin-top:16px;padding-top:14px;border-top:1px solid #eef0f4;font-size:14px}
 .rates b{font-weight:650}
 .ping{margin-top:16px;padding-top:14px;border-top:1px solid #eef0f4}
@@ -361,6 +365,25 @@ function pingRow(name,r){var ms=r&&r.avg!=null?Math.round(r.avg):null;var loss=r
  var w=ms==null?0:Math.min(100,ms/300*100);
  return '<div class="prow"><span>'+name+'</span><span>'+(ms==null?'—':ms+' ms')+'</span><span class="bar"><i style="width:'+w+'%;background:'+barColor(ms)+'"></i></span><span class="loss">'+(loss==null?'—':loss+'% 丢包')+'</span></div>'}
 function routeTag(v){if(!v)return '<span class="route-tag unknown">未知</span>';if(v==='未知')return '<span class="route-tag unknown">未知</span>';return '<span class="route-tag">'+esc(v)+'</span>'}
+// 圆盘指针仪表: 240 度表盘(左下 210 度经顶部到右下 -30 度), 指针指向数值, 颜色随阈值变
+function polar(cx,cy,r,deg){var a=deg*Math.PI/180;return [cx+r*Math.cos(a),cy-r*Math.sin(a)]}
+function arcD(cx,cy,r,a0,a1){var s=polar(cx,cy,r,a0),e=polar(cx,cy,r,a1);var large=(a0-a1)>180?1:0;return 'M '+s[0].toFixed(1)+' '+s[1].toFixed(1)+' A '+r+' '+r+' 0 '+large+' 1 '+e[0].toFixed(1)+' '+e[1].toFixed(1)}
+function gaugeColor(v){if(v<60)return '#22c55e';if(v<85)return '#eab308';return '#ef4444'}
+function gauge(v){
+  var ang=210-v/100*240;
+  var tip=polar(60,52,32,ang);
+  var valArc=v<=0?'':('<path d="'+arcD(60,52,44,210,ang)+'" fill="none" stroke="'+gaugeColor(v)+'" stroke-width="8" stroke-linecap="round"/>');
+  var p0=polar(60,52,54,210),p1=polar(60,52,54,-30);
+  return '<svg viewBox="0 0 120 86" class="gauge">'
+   +'<path d="'+arcD(60,52,44,210,-30)+'" fill="none" stroke="#eef0f4" stroke-width="8" stroke-linecap="round"/>'
+   +valArc
+   +'<line x1="60" y1="52" x2="'+tip[0].toFixed(1)+'" y2="'+tip[1].toFixed(1)+'" stroke="#1f2430" stroke-width="2" stroke-linecap="round"/>'
+   +'<circle cx="60" cy="52" r="4" fill="#1f2430"/>'
+   +'<text x="'+p0[0].toFixed(0)+'" y="'+(p0[1]+3).toFixed(0)+'" font-size="9" fill="#8a90a0" text-anchor="middle">0</text>'
+   +'<text x="'+p1[0].toFixed(0)+'" y="'+(p1[1]+3).toFixed(0)+'" font-size="9" fill="#8a90a0" text-anchor="middle">100</text>'
+   +'<text x="60" y="76" font-size="14" font-weight="700" fill="#1f2430" text-anchor="middle">'+v.toFixed(1)+'%</text>'
+   +'</svg>';
+}
 function render(nodes,now){
  if(!nodes.length){list.innerHTML='<div class="empty">暂无节点<br><span style="font-size:13px">在 VPS 上安装 agent 并上报成功后,这里会显示数据。</span></div>';return}
  var h='';
@@ -372,11 +395,13 @@ function render(nodes,now){
   var quotaPct=m.quotaGB?pct(traffic,m.quotaGB*1073741824):null;
   var remain='';
   if(m.expiresAt){var days=Math.ceil((new Date(m.expiresAt+'T00:00:00Z').getTime()-Date.now())/86400000);remain='剩余 '+days+' 天';}
-  h+='<div class="card"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(n.id)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 在线 '+daysSince(n.firstSeen)+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
+  var displayName=(d.name&&d.name.length?d.name:n.id);
+  var idSuffix=(displayName!==n.id)?' · '+esc(n.id):'';
+  h+='<div class="card"><div class="nodehead"><h2><span class="dot '+(n.online?'on':'off')+'"></span>'+esc(displayName)+'</h2><span class="meta">'+(n.online?'在线':'离线')+' · 在线 '+daysSince(n.firstSeen)+idSuffix+(remain?' · '+remain:'')+(m.price?' · '+esc(m.price):'')+'</span></div>';
   h+='<div class="grid">'
-   +'<div class="tile"><div class="lab">CPU</div><div class="big">'+d.cpu.toFixed(1)+'%</div><div class="small">'+d.load.map(function(x){return x.toFixed(2)}).join(', ')+'</div></div>'
-   +'<div class="tile"><div class="lab">内存</div><div class="big">'+memPct+'%</div><div class="small">'+fmtBytes(d.mem_used)+' / '+fmtBytes(d.mem_total)+'</div></div>'
-   +'<div class="tile"><div class="lab">硬盘</div><div class="big">'+diskPct+'%</div><div class="small">'+fmtBytes(d.disk_used)+' / '+fmtBytes(d.disk_total)+'</div></div>'
+   +'<div class="tile"><div class="lab">CPU</div>'+gauge(d.cpu)+'<div class="small">'+d.load.map(function(x){return x.toFixed(2)}).join(', ')+'</div></div>'
+   +'<div class="tile"><div class="lab">内存</div>'+gauge(memPct)+'<div class="small">'+fmtBytes(d.mem_used)+' / '+fmtBytes(d.mem_total)+'</div></div>'
+   +'<div class="tile"><div class="lab">硬盘</div>'+gauge(diskPct)+'<div class="small">'+fmtBytes(d.disk_used)+' / '+fmtBytes(d.disk_total)+'</div></div>'
    +'<div class="tile"><div class="lab">流量</div><div class="big">'+(quotaPct==null?fmtBytes(traffic):quotaPct+'%')+'</div><div class="small">'+fmtBytes(traffic)+quotaLine+'</div></div>'
    +'</div>';
   h+='<div class="rates"><span>↑ '+fmtRate(d.net_tx_rate)+'</span><span>↓ '+fmtRate(d.net_rx_rate)+'</span><span style="color:#8a90a0;font-size:13px">累计 ↑ '+fmtBytes(d.net_tx)+' ↓ '+fmtBytes(d.net_rx)+'</span></div>';

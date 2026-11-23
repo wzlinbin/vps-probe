@@ -32,13 +32,14 @@ import (
 // ---------- 配置 ----------
 
 type config struct {
-	URL      string
-	Token    string
-	Node     string
-	Interval time.Duration
-	Once     bool
+	URL       string
+	Token     string
+	Node      string
+	Name      string
+	Interval  time.Duration
+	Once      bool
 	AllowHTTP bool
-	StateDir string
+	StateDir  string
 }
 
 func loadConfig() config {
@@ -46,6 +47,7 @@ func loadConfig() config {
 	flag.StringVar(&c.URL, "url", "", "Worker 上报地址, 如 https://vps-probe.<子域>.workers.dev/api/push")
 	flag.StringVar(&c.Token, "token", "", "上报 token (也可走环境变量 PROBE_TOKEN)")
 	flag.StringVar(&c.Node, "node", "", "节点 id, 如 la (也可走环境变量 PROBE_NODE)")
+	flag.StringVar(&c.Name, "name", "", "节点显示名, 如 洛杉矶 (也可走环境变量 PROBE_NAME, 不填则显示节点 id)")
 	flag.DurationVar(&c.Interval, "interval", 30*time.Second, "上报间隔")
 	flag.BoolVar(&c.Once, "once", false, "只采集一次并打印 JSON，不上报")
 	flag.BoolVar(&c.AllowHTTP, "allow-http", false, "允许 http 上报(仅本地测试)")
@@ -60,6 +62,9 @@ func loadConfig() config {
 	}
 	if v := os.Getenv("PROBE_NODE"); v != "" && c.Node == "" {
 		c.Node = v
+	}
+	if v := os.Getenv("PROBE_NAME"); v != "" && c.Name == "" {
+		c.Name = v
 	}
 	if v := os.Getenv("PROBE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -78,6 +83,7 @@ type pingResult struct {
 
 type report struct {
 	Node     string                 `json:"node"`
+	Name     string                 `json:"name,omitempty"`
 	TS       int64                  `json:"ts"`
 	Hostname string                 `json:"hostname"`
 	Uptime   int64                  `json:"uptime"` // 秒
@@ -105,6 +111,7 @@ var pingTargets = map[string]string{
 // ---------- 采集 ----------
 
 type collector struct {
+	name      string
 	prevCPU   cpuSample
 	prevNet   netSample
 	prevNetAt time.Time
@@ -475,7 +482,7 @@ func (c *collector) collect(node string) report {
 	wg.Wait()
 
 	r := report{
-		Node: node, TS: now.Unix(), Hostname: hn,
+		Node: node, Name: c.name, TS: now.Unix(), Hostname: hn,
 		Uptime: readUptime(), CPU: cpu, Load: readLoad(),
 		MemTotal: memTotal, MemUsed: memUsed,
 		DiskTotal: diskTotal, DiskUsed: diskUsed,
@@ -548,7 +555,7 @@ func main() {
 		}
 	}
 
-	c := &collector{}
+	c := &collector{name: cfg.Name}
 	if cfg.StateDir != "" {
 		c.statePath = filepath.Join(cfg.StateDir, "state.json")
 		c.loadState()

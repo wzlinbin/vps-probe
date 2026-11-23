@@ -291,3 +291,57 @@ func TestPushRefreshRoutes(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+func TestMonthOf(t *testing.T) {
+	// 北京时间 11 月 30 日 23:30(UTC 15:30) 仍是 11 月; 12 月 1 日 0:30(UTC 前一日 16:30) 已是 12 月
+	if got := monthOf(time.Date(2026, 11, 30, 15, 30, 0, 0, time.UTC)); got != "2026-11" {
+		t.Fatalf("11/30 23:30 CST 应为 2026-11, got %s", got)
+	}
+	if got := monthOf(time.Date(2026, 11, 30, 16, 30, 0, 0, time.UTC)); got != "2026-12" {
+		t.Fatalf("12/1 00:30 CST 应为 2026-12, got %s", got)
+	}
+}
+
+func TestAddNetMonthly(t *testing.T) {
+	nov30 := time.Date(2026, 11, 30, 15, 0, 0, 0, time.UTC) // 北京时间 11/30 23:00, 仍是 11 月
+	dec1 := time.Date(2026, 11, 30, 16, 30, 0, 0, time.UTC) // 北京时间 12/1 00:30, 已是 12 月
+	// 首次运行: 从 0 起, 不拿 /proc 已有计数当起点
+	c := &collector{}
+	c.addNet(nov30, netSample{rx: 1000000, tx: 2000000})
+	if c.month != "2026-11" || c.cumRx != 0 || c.cumTx != 0 {
+		t.Fatalf("首次应从 0 起(month 2026-11), got month=%s cumRx=%d cumTx=%d", c.month, c.cumRx, c.cumTx)
+	}
+	// 同月内只加增量
+	c.addNet(nov30, netSample{rx: 1000500, tx: 2000800})
+	if c.cumRx != 500 || c.cumTx != 800 {
+		t.Fatalf("同月应只加增量, got cumRx=%d cumTx=%d", c.cumRx, c.cumTx)
+	}
+	// 跨月: 清零, 以当前计数为新月起点, 旧月流量不带入新月
+	c.addNet(dec1, netSample{rx: 1000600, tx: 2000900})
+	if c.month != "2026-12" || c.cumRx != 0 || c.cumTx != 0 {
+		t.Fatalf("跨月应清零(month 2026-12), got month=%s cumRx=%d cumTx=%d", c.month, c.cumRx, c.cumTx)
+	}
+	c.addNet(dec1, netSample{rx: 1000700, tx: 2001000})
+	if c.cumRx != 100 || c.cumTx != 100 {
+		t.Fatalf("新月内应只加增量, got cumRx=%d cumTx=%d", c.cumRx, c.cumTx)
+	}
+	// 同月内 VPS 重启(/proc 计数归零): 直接加当前值, 不丢也不重复算
+	c.addNet(dec1, netSample{rx: 50, tx: 60})
+	if c.cumRx != 150 || c.cumTx != 160 {
+		t.Fatalf("重启后应加当前值, got cumRx=%d cumTx=%d", c.cumRx, c.cumTx)
+	}
+}
+
+func TestAddNetOldState(t *testing.T) {
+	// 旧版 state(无月份、已有全量累计): 升级后当月从 0 起, 旧累计不带入
+	c := &collector{month: "", cumRx: 150000000000, cumTx: 145000000000, lastRx: 999000, lastTx: 888000}
+	now := time.Date(2026, 11, 23, 5, 0, 0, 0, time.UTC) // 北京时间 11/23 13:00
+	c.addNet(now, netSample{rx: 999100, tx: 888200})
+	if c.month != "2026-11" || c.cumRx != 0 || c.cumTx != 0 {
+		t.Fatalf("旧 state 应当月从 0 起, got month=%s cumRx=%d cumTx=%d", c.month, c.cumRx, c.cumTx)
+	}
+	c.addNet(now, netSample{rx: 999200, tx: 888300})
+	if c.cumRx != 100 || c.cumTx != 100 {
+		t.Fatalf("旧 state 迁移后应只加增量, got cumRx=%d cumTx=%d", c.cumRx, c.cumTx)
+	}
+}

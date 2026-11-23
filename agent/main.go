@@ -155,7 +155,7 @@ type collector struct {
 	cumTx         uint64
 	lastRx        uint64
 	lastTx        uint64
-	haveState     bool
+	month         string // 当月累计所属月份, 如 2026-11
 	// 线路探测降频: 去程/回程每 routeInterval 才重测一次, 期间用缓存
 	routeInterval time.Duration
 	lastRoute     map[string]map[string]*string
@@ -338,11 +338,14 @@ func readUptime() int64 {
 }
 
 // 累计流量持久化: 每轮把增量加进 state 文件, 重启/掉电也不丢。
+// 当月累计: Month 记录累计所属月份(北京时间, 如 2026-11),
+// 跨月时清零重算; Month 为空表示旧版 state(无月份), 升级后当月从 0 起。
 type netState struct {
 	CumRx  uint64 `json:"cum_rx"`
 	CumTx  uint64 `json:"cum_tx"`
 	LastRx uint64 `json:"last_rx"`
 	LastTx uint64 `json:"last_tx"`
+	Month  string `json:"month"`
 }
 
 func (c *collector) loadState() {
@@ -356,7 +359,7 @@ func (c *collector) loadState() {
 	var s netState
 	if json.Unmarshal(b, &s) == nil {
 		c.cumRx, c.cumTx, c.lastRx, c.lastTx = s.CumRx, s.CumTx, s.LastRx, s.LastTx
-		c.haveState = true
+		c.month = s.Month
 	}
 }
 
@@ -364,13 +367,45 @@ func (c *collector) saveState() {
 	if c.statePath == "" {
 		return
 	}
-	s := netState{CumRx: c.cumRx, CumTx: c.cumTx, LastRx: c.lastRx, LastTx: c.lastTx}
+	s := netState{CumRx: c.cumRx, CumTx: c.cumTx, LastRx: c.lastRx, LastTx: c.lastTx, Month: c.month}
 	b, _ := json.Marshal(s)
 	_ = os.MkdirAll(filepath.Dir(c.statePath), 0o755)
 	tmp := c.statePath + ".tmp"
 	if os.WriteFile(tmp, b, 0o644) == nil {
 		_ = os.Rename(tmp, c.statePath)
 	}
+}
+
+// 当月(北京时间, 如 2026-11)。中国不实行夏令时, 固定 +8 时区即可,
+// 也不依赖 VPS 上的 zoneinfo 数据库。
+var cstZone = time.FixedZone("CST", 8*3600)
+
+func monthOf(t time.Time) string {
+	return t.In(cstZone).Format("2006-01")
+}
+
+// addNet 累计本轮流量(当月累计):
+//   - 月份变了(或首次运行、或旧版 state 无月份)就清零, 从当前月重新开始算,
+//     以当前计数为新月起点, 之前月份的流量不计入;
+//   - 同月内只加增量; VPS 重启后 /proc 计数归零时直接加当前值(不丢也不重复算)。
+func (c *collector) addNet(now time.Time, cur netSample) {
+	month := monthOf(now)
+	if c.month != month {
+		c.month = month
+		c.cumRx, c.cumTx = 0, 0
+		c.lastRx, c.lastTx = cur.rx, cur.tx
+	}
+	if cur.rx >= c.lastRx {
+		c.cumRx += cur.rx - c.lastRx
+	} else {
+		c.cumRx += cur.rx
+	}
+	if cur.tx >= c.lastTx {
+		c.cumTx += cur.tx - c.lastTx
+	} else {
+		c.cumTx += cur.tx
+	}
+	c.lastRx, c.lastTx = cur.rx, cur.tx
 }
 
 // ---------- ping / traceroute ----------
@@ -723,24 +758,8 @@ func (c *collector) collect(node string) report {
 			}
 		}
 	}
-	// 累计流量: 本轮增量进 state; 重启后 /proc 计数归零, 直接加当前值。
-	if c.haveState {
-		if cur.rx >= c.lastRx {
-			c.cumRx += cur.rx - c.lastRx
-		} else {
-			c.cumRx += cur.rx
-		}
-		if cur.tx >= c.lastTx {
-			c.cumTx += cur.tx - c.lastTx
-		} else {
-			c.cumTx += cur.tx
-		}
-	} else {
-		c.cumRx = cur.rx
-		c.cumTx = cur.tx
-		c.haveState = true
-	}
-	c.lastRx, c.lastTx = cur.rx, cur.tx
+	// 当月累计(跨月自动清零), 见 addNet。
+	c.addNet(now, cur)
 	c.prevNet, c.prevNetAt = cur, now
 	c.saveState()
 

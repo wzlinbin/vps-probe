@@ -447,7 +447,13 @@ function gauge(v){
    +'<text x="60" y="76" font-size="14" font-weight="700" fill="#1f2430" text-anchor="middle">'+v.toFixed(1)+'%</text>'
    +'</svg>';
 }
+// 设置表单正在输入时不重建卡片, 否则 5 秒自动刷新会清空刚输入的字符。
+// editingMeta: 焦点在设置表单内(输入框或保存按钮)时正在编辑; snapshot/restore: 重建前后保留未保存的草稿。
+function editingMeta(){var a=document.activeElement;return !!(a&&a.closest&&a.closest('.metaform'))}
+function snapshotMeta(){var s={};document.querySelectorAll('.metaform input').forEach(function(i){s[i.id]=i.value});return s}
+function restoreMeta(s){Object.keys(s).forEach(function(id){var el=document.getElementById(id);if(el)el.value=s[id]})}
 function render(nodes,now){
+ var draft=snapshotMeta();
  if(!nodes.length){list.innerHTML='<div class="empty">暂无节点<br><span style="font-size:13px">在 VPS 上安装 agent 并上报成功后,这里会显示数据。</span></div>';return}
  var h='';
  nodes.forEach(function(n){
@@ -477,6 +483,7 @@ function render(nodes,now){
   h+='</div>';
  });
  list.innerHTML=h;
+ restoreMeta(draft);
  list.querySelectorAll('.metaform button').forEach(function(btn){
   btn.addEventListener('click',function(){
    var id=btn.getAttribute('data-node');
@@ -485,7 +492,7 @@ function render(nodes,now){
   });
  });
 }
-function load(){fetch('/api/status').then(function(r){if(r.status===401){location.reload();return null}return r.json()}).then(function(j){if(!j)return;updated.textContent='最近更新 '+new Date(j.now*1000).toLocaleTimeString('zh-CN');render(j.nodes,j.now)}).catch(function(){})}
+function load(){fetch('/api/status').then(function(r){if(r.status===401){location.reload();return null}return r.json()}).then(function(j){if(!j)return;if(editingMeta())return;updated.textContent='最近更新 '+new Date(j.now*1000).toLocaleTimeString('zh-CN');render(j.nodes,j.now)}).catch(function(){})}
 document.getElementById('logout').addEventListener('click',function(){fetch('/api/logout',{method:'POST'}).then(function(){location.reload()})});
 load();setInterval(load,5000);
 </script></body></html>`;

@@ -181,6 +181,25 @@ printf '%s' '<新密码>' | python3 ~/workspace/custom-connectors/custom.cloudfl
 - 换 token 期间旧 token 上报会 401，面板上节点会短暂显示离线，逐台换、逐台确认恢复，不要一次全换完再查。
 - 若怀疑 token 已泄露：立即按上面轮换流程换掉，不要只换面板密码（面板密码换了，泄露的 token 还能继续上报）。
 
+### 面板登录密码
+
+面板登录密码是另一个 Cloudflare Secret **`DASHBOARD_PASSWORD`**，和上报 token 分开存、分开换。**没有默认密码**：首次部署时必须先设好才能登录，密码值只存在 Cloudflare Secret 里，代码、仓库、文件、记忆里都不记。
+
+```bash
+# 首次设置 (部署面板前先做)
+cd worker
+printf '%s' '<面板密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+```
+
+- 密码就是你当初设的那个，**我这里查不到值**（`wrangler secret list` 只能看到名字，看不到值）。忘了就直接重置，不用找回旧的：
+
+```bash
+# 重置面板密码 (立即生效, 已登录的会话 Cookie 仍可用到 7 天过期)
+printf '%s' '<新密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+```
+
+- 注意：代码里 `DASHBOARD_PASSWORD` 没设时会回落到空字符串比较，**部署时如果忘了设，空密码就能登录**。所以首次部署务必先设密码再对外开放面板；现在线上 secret 已确认存在，不用担心这条。
+
 ## 重新部署
 
 ```bash

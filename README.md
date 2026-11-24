@@ -131,12 +131,11 @@ agent 也支持 `-token` 命令行参数或 `PROBE_TOKEN` 环境变量，但正�
 # 1. 生成一个随机 token (32 字节 hex, 记好, 只显示这一次)
 openssl rand -hex 32
 
-# 2. 存进 Cloudflare Secret (Worker 侧)
-cd worker
-printf '%s' '<上一步生成的 token>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put AGENT_TOKEN
+# 2. 存进 Cloudflare Secret (Worker 侧, 脚本会提示输入、不回显)
+./set-secret.sh AGENT_TOKEN
 
 # 3. 面板密码同样先设好 (DASHBOARD_PASSWORD)
-printf '%s' '<面板密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+./set-secret.sh DASHBOARD_PASSWORD
 
 # 4. 在各 VPS 上安装 agent, 把 token 传给 install.sh
 curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <token> <节点id> [显示名]
@@ -151,8 +150,7 @@ token 没有过期时间，不换就一直有效。轮换要两边一起换，�
 openssl rand -hex 32
 
 # 2. 更新 Worker 侧 secret (立即生效, 旧 token 马上失效)
-cd worker
-printf '%s' '<新token>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put AGENT_TOKEN
+./set-secret.sh AGENT_TOKEN
 
 # 3. 在每一台 VPS 上更新 env 并重启 agent (逐台做, 做完一台确认上报恢复再做下一台)
 sudo sed -i 's/^PROBE_TOKEN=.*/PROBE_TOKEN=<新token>/' /etc/vps-probe/env
@@ -165,7 +163,7 @@ sudo systemctl restart vps-probe-agent
 面板密码轮换同理：
 
 ```bash
-printf '%s' '<新密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+./set-secret.sh DASHBOARD_PASSWORD
 # 立即生效, 旧密码登录的会话 Cookie 仍可用到过期 (7 天), 不放心可等其自然过期。
 ```
 
@@ -186,40 +184,29 @@ printf '%s' '<新密码>' | python3 ~/workspace/custom-connectors/custom.cloudfl
 面板登录密码是另一个 Cloudflare Secret **`DASHBOARD_PASSWORD`**，和上报 token 分开存、分开换。**没有默认密码**：首次部署时必须先设好才能登录，密码值只存在 Cloudflare Secret 里，代码、仓库、文件、记忆里都不记。
 
 ```bash
-# 首次设置 (部署面板前先做)
-cd worker
-printf '%s' '<面板密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+# 首次设置 (部署面板前先做, 脚本会提示输入、不回显)
+./set-secret.sh DASHBOARD_PASSWORD
 ```
 
 - 密码就是你当初设的那个，**我这里查不到值**（`wrangler secret list` 只能看到名字，看不到值）。忘了就直接重置，不用找回旧的：
 
 ```bash
 # 重置面板密码 (立即生效, 已登录的会话 Cookie 仍可用到 7 天过期)
-printf '%s' '<新密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+./set-secret.sh DASHBOARD_PASSWORD
 ```
 
 - 注意：代码里 `DASHBOARD_PASSWORD` 没设时会回落到空字符串比较，**部署时如果忘了设，空密码就能登录**。所以首次部署务必先设密码再对外开放面板；现在线上 secret 已确认存在，不用担心这条。
 
 ## 重新部署
 
-```bash
-# Worker + Workflow 一起部署 (wrangler.toml 里配好)
-cd worker
-python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py deploy
-# Workflow 代码改了要重启实例才生效:
-python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py workflows instances restart vps-probe-boce boce-agent
-```
+极简版见 [DEPLOY.md](DEPLOY.md)，都在项目根目录运行：
 
 ```bash
-# Agent 发新版 (改了 agent/main.go 才需要)
-cd ~/workspace/vps-probe
-bash agent/build.sh   # 交叉编译 amd64 + arm64 到 dist/
-gh release create vX.Y.Z dist/vps-probe-agent-linux-amd64 dist/vps-probe-agent-linux-arm64 --repo wzlinbin/vps-probe --title "vX.Y.Z ..." --notes "..."
-# 注意: Release 的 asset 名必须与 install.sh 的 BIN 一致
-# (vps-probe-agent-linux-amd64 / vps-probe-agent-linux-arm64),
-# install.sh 的下载地址是 releases/latest/download, 不要写死版本号。
-# 然后在各 VPS 重跑安装命令升级。
+./deploy.sh        # Worker + Workflow, 一条命令
+./release.sh vX.Y.Z "更新说明"   # Agent 发新版 (改了 agent/main.go 才需要)
 ```
+
+注意：Release 的 asset 名必须与 install.sh 的 BIN 一致（`vps-probe-agent-linux-amd64` / `vps-probe-agent-linux-arm64`），install.sh 的下载地址是 `releases/latest/download`，不要写死版本号。发完在各 VPS 重跑安装命令升级。
 
 ## 常用命令
 

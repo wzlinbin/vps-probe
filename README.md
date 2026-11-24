@@ -1,5 +1,7 @@
 # VPS 探针 (vps-probe)
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wzlinbin/vps-probe/tree/main/worker)
+
 自建的轻量 VPS 监控面板：Agent 采数据 → Cloudflare Worker 收数据、存 KV → 面板展示。
 面板地址：https://vps-probe.wzlinbin.workers.dev
 

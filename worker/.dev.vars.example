@@ -1,0 +1,4 @@
+# agent 上报 token: 部署时填, 任意随机字符串 (如 openssl rand -hex 32 的输出)
+AGENT_TOKEN=
+# 面板登录密码: 部署时填
+DASHBOARD_PASSWORD=

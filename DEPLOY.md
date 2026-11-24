@@ -1,6 +1,16 @@
 # vps-probe 部署 (极简版)
 
-都在项目根目录运行, 不用 `cd` 到别处:
+## 点按钮部署: 不用敲命令
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wzlinbin/vps-probe/tree/main/worker)
+
+点一下，Cloudflare 会从 GitHub 拉代码、自动创建 KV、部署 Worker。部署时它会让你填两个 secret（`AGENT_TOKEN` 上报 token、`DASHBOARD_PASSWORD` 面板登录密码），填完就能用。去程探测的 Workflow 需要 Workers Paid 套餐（已有）。
+
+注意：按钮是全新部署一台 Worker，现有那台和它的数据不受影响；部署时 Worker 名字可以改，改了就是另一台。
+
+## 命令行部署
+
+都在项目根目录运行，不用 `cd` 到别处：
 
 ```bash
 cd ~/workspace/vps-probe

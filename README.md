@@ -112,15 +112,74 @@ curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/insta
 - **响应头**：CSP（不加载任何外部资源）、X-Frame-Options DENY、nosniff、no-referrer、no-store。
 - Token 与面板密码只存在 Cloudflare Secret 里，不进代码、不进日志、不进任何响应；agent 的 token 只放在 VPS 上 600 权限的 `/etc/vps-probe/env`。
 
-## 轮换凭证
+## 上报 Token 的设置与管理
+
+上报 token 是 agent 与 Worker 之间的唯一凭证：**一把固定 token，所有节点共用，不绑定节点**。Worker 只认 token 不认节点 id（节点 id 是上报 JSON 里自己填的），所以任何一台 VPS 的 token 泄露，就能冒充任意节点推假数据。token 不在代码、不在仓库、不在任何日志与响应里（唯一的例外是面板登录后可取，见下）。
+
+### Token 存在哪
+
+| 位置 | 名字 | 怎么进去 | 权限 |
+|---|---|---|---|
+| Cloudflare Secret（Worker 侧） | `AGENT_TOKEN` | 首次部署时 `wrangler secret put AGENT_TOKEN`，或仪表盘上手工建 | 只有 Cloudflare 账号能看 |
+| 每台 VPS | `PROBE_TOKEN` | install.sh 安装时把命令行传的 token 写进 `/etc/vps-probe/env` | 文件 600，systemd 靠 `EnvironmentFile` 读它 |
+
+agent 也支持 `-token` 命令行参数或 `PROBE_TOKEN` 环境变量，但正常安装都走 `/etc/vps-probe/env`，不要用命令行参数传 token（会进 shell 历史）。
+
+### 首次设置
 
 ```bash
+# 1. 生成一个随机 token (32 字节 hex, 记好, 只显示这一次)
+openssl rand -hex 32
+
+# 2. 存进 Cloudflare Secret (Worker 侧)
+cd worker
+printf '%s' '<上一步生成的 token>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put AGENT_TOKEN
+
+# 3. 面板密码同样先设好 (DASHBOARD_PASSWORD)
+printf '%s' '<面板密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+
+# 4. 在各 VPS 上安装 agent, 把 token 传给 install.sh
+curl -fsSL https://raw.githubusercontent.com/wzlinbin/vps-probe/main/agent/install.sh -o install.sh && sudo bash install.sh https://vps-probe.wzlinbin.workers.dev <token> <节点id> [显示名]
+```
+
+### 轮换 token（泄露怀疑、定期更换时）
+
+token 没有过期时间，不换就一直有效。轮换要两边一起换，顺序不能反（先换 Worker 再换 VPS，中间会有一段时间旧 token 上报失败，属正常）：
+
+```bash
+# 1. 生成新 token
+openssl rand -hex 32
+
+# 2. 更新 Worker 侧 secret (立即生效, 旧 token 马上失效)
 cd worker
 printf '%s' '<新token>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put AGENT_TOKEN
-printf '%s' '<新密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
-# 换 token 后要在各 VPS 上更新 /etc/vps-probe/env 并重启 agent:
-# systemctl restart vps-probe-agent
+
+# 3. 在每一台 VPS 上更新 env 并重启 agent (逐台做, 做完一台确认上报恢复再做下一台)
+sudo sed -i 's/^PROBE_TOKEN=.*/PROBE_TOKEN=<新token>/' /etc/vps-probe/env
+sudo systemctl restart vps-probe-agent
+# 确认: 面板上该节点恢复在线 (120 秒内有上报算在线), 或看日志 journalctl -u vps-probe-agent -f
+
+# 4. 全部节点恢复在线后, 轮换完成。旧 token 即作废。
 ```
+
+面板密码轮换同理：
+
+```bash
+printf '%s' '<新密码>' | python3 ~/workspace/custom-connectors/custom.cloudflare/bin/wrangler-auth.py secret put DASHBOARD_PASSWORD
+# 立即生效, 旧密码登录的会话 Cookie 仍可用到过期 (7 天), 不放心可等其自然过期。
+```
+
+### 找回 token
+
+- 任意一台 VPS 上：`sudo grep PROBE_TOKEN /etc/vps-probe/env`（token 明文存在这里，600 权限）。
+- 面板登录后：顶栏“＋ 新增节点”弹窗会自动调 `GET /api/agent-token` 取 token 生成安装命令。也就是说，**能登录面板的人就能拿到 token**，面板密码和 token 是一个级别的东西，面板密码不要设弱密码、不要和别处共用。
+
+### 注意事项
+
+- 不要把 token 写进代码、仓库、聊天记录、截图里；install.sh 命令行里的 token 会进 VPS 的 shell 历史，装完可清一次历史（`history -c`）。
+- 不要把 token 告诉别人、不要发给别人装 agent——每多一个人知道，泄露面就多一分。新增节点只在自己的 VPS 上跑安装命令。
+- 换 token 期间旧 token 上报会 401，面板上节点会短暂显示离线，逐台换、逐台确认恢复，不要一次全换完再查。
+- 若怀疑 token 已泄露：立即按上面轮换流程换掉，不要只换面板密码（面板密码换了，泄露的 token 还能继续上报）。
 
 ## 重新部署
 
